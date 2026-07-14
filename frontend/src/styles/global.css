@@ -1,0 +1,134 @@
+:root {
+  color: #1f2937;
+  background: #f5f7fb;
+  font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  background: #fff;
+  border-right: 1px solid #e5e7eb;
+  padding: 24px 18px;
+}
+
+.sidebar h1 {
+  font-size: 22px;
+  line-height: 1.35;
+  margin: 0 0 28px;
+}
+
+.content {
+  min-width: 0;
+  padding: 24px;
+}
+
+.eyebrow {
+  color: #64748b;
+  font-size: 12px;
+  letter-spacing: .04em;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+}
+
+.page-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.page-header h2 {
+  font-size: 24px;
+  margin: 0;
+}
+
+.two-column {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: 330px minmax(0, 1fr);
+}
+
+.stack {
+  display: grid;
+  gap: 18px;
+}
+
+.panel {
+  border-radius: 8px;
+}
+
+.dynamic-form {
+  max-width: 760px;
+}
+
+.list-field {
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  margin: 0 0 18px;
+  padding: 14px;
+}
+
+.list-field legend {
+  color: #606266;
+  font-weight: 600;
+  padding: 0 6px;
+}
+
+.required {
+  color: #f56c6c;
+}
+
+.list-row {
+  align-items: end;
+  border-bottom: 1px dashed #e5e7eb;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+}
+
+.form-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.json-preview {
+  background: #0f172a;
+  border-radius: 8px;
+  color: #dbeafe;
+  line-height: 1.6;
+  margin: 0;
+  max-height: 460px;
+  overflow: auto;
+  padding: 16px;
+  white-space: pre-wrap;
+}
+
+.warning-item + .warning-item {
+  margin-top: 10px;
+}
+
+.summary {
+  overflow: hidden;
+}
+
+@media (max-width: 960px) {
+  .app-shell,
+  .two-column {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>业务系统</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <div id="business-system-app" class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="interface-label">External Business System</p>
+          <h1 id="system-name">业务系统</h1>
+        </div>
+        <div class="status-area">
+          <span id="connection-status" class="status unknown">检查接入状态</span>
+          <button id="refresh-button" class="secondary">刷新数据</button>
+          <button id="reset-button" class="danger">重置本系统演示</button>
+        </div>
+      </header>
+
+      <main>
+        <nav class="tabs" aria-label="业务视图">
+          <button class="tab active" data-tab="tasks">任务派发</button>
+          <button class="tab" data-tab="submissions">申请记录</button>
+          <button class="tab" data-tab="interface">接口说明</button>
+        </nav>
+
+        <section id="tasks-panel" class="tab-panel active">
+          <div class="layout">
+            <section class="panel">
+              <h2>创建并派发任务</h2>
+              <form id="task-form">
+                <label>任务标题<input id="task-title" required /></label>
+                <label>物品名称<input id="item-name" required /></label>
+                <label>数量<input id="quantity" type="number" min="1" value="1" required /></label>
+                <label>用途或原因<textarea id="reason" rows="4" required></textarea></label>
+                <label>处理人<input id="assignee" value="u001" required /></label>
+                <button type="submit" class="primary">派发到中控</button>
+              </form>
+            </section>
+            <section class="panel wide">
+              <div class="section-heading"><h2>任务记录</h2><span id="task-count" class="count">0</span></div>
+              <div class="task-columns">
+                <div><h3>待办</h3><div id="pending-list" class="record-list"></div></div>
+                <div><h3>已完成</h3><div id="completed-list" class="record-list"></div></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="submissions-panel" class="tab-panel">
+          <section class="panel"><h2>中控提交的新申请</h2><div id="submission-list" class="record-list"></div></section>
+        </section>
+
+        <section id="interface-panel" class="tab-panel">
+          <section class="panel"><h2>提供给 AI 的接口说明</h2><pre id="interface-description"></pre></section>
+        </section>
+      </main>
+      <div id="message" class="message" role="status"></div>
+    </div>
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

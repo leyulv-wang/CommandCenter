@@ -1,0 +1,34 @@
+{
+  "form_code": "after_sales",
+  "form_name": "售后处理",
+  "endpoint_type": "workflow",
+  "endpoint": {
+    "method": "POST",
+    "url": "http://oa.example.com/api/km-review/addReview",
+    "fdTemplateId": "template_after_sales_001",
+    "default_docStatus": "20",
+    "submit_mode": "mock",
+    "content_type": "form",
+    "timeout_seconds": 30
+  },
+  "fields": [
+    {
+      "label": "客户名称",
+      "key": "customer_name",
+      "type": "text",
+      "required": true
+    },
+    {
+      "label": "问题描述",
+      "key": "issue_description",
+      "type": "textarea",
+      "required": true
+    },
+    {
+      "label": "紧急程度",
+      "key": "priority",
+      "type": "select",
+      "required": false
+    }
+  ]
+}

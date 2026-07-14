@@ -1,0 +1,34 @@
+{
+  "form_code": "hr_request",
+  "form_name": "人事申请",
+  "endpoint_type": "workflow",
+  "endpoint": {
+    "method": "POST",
+    "url": "http://oa.example.com/api/km-review/addReview",
+    "fdTemplateId": "template_hr_001",
+    "default_docStatus": "20",
+    "submit_mode": "mock",
+    "content_type": "form",
+    "timeout_seconds": 30
+  },
+  "fields": [
+    {
+      "label": "申请类型",
+      "key": "request_type",
+      "type": "text",
+      "required": true
+    },
+    {
+      "label": "开始时间",
+      "key": "start_time",
+      "type": "datetime",
+      "required": true
+    },
+    {
+      "label": "结束时间",
+      "key": "end_time",
+      "type": "datetime",
+      "required": true
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "form_execution": "./app/agent/graph.py:form_execution_graph"
+  },
+  "env": ".env"
+}

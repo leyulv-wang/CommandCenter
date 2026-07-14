@@ -1,0 +1,32 @@
+{
+  "form_code": "office_supply_task_result",
+  "form_name": "办公用品任务处理",
+  "endpoint_type": "custom_url",
+  "endpoint": {
+    "method": "POST",
+    "url": "http://127.0.0.1:8102/api/tasks/complete",
+    "fdTemplateId": null,
+    "default_docStatus": "20",
+    "operator_param": "docOperator",
+    "values_param": "formValues",
+    "submit_mode": "http",
+    "content_type": "form",
+    "timeout_seconds": 30
+  },
+  "fields": [
+    {
+      "label": "处理结论",
+      "key": "decision",
+      "type": "text",
+      "required": true,
+      "item_fields": []
+    },
+    {
+      "label": "处理意见",
+      "key": "comment",
+      "type": "textarea",
+      "required": true,
+      "item_fields": []
+    }
+  ]
+}

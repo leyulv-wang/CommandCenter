@@ -1,0 +1,495 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Literal
+
+from fastapi import FastAPI, Form, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+
+SeedRecord = dict[str, Any]
+SeedTask = dict[str, Any]
+
+
+class CreateTaskRequest(BaseModel):
+    title: str
+    task_type: str
+    form_code: str
+    content: dict[str, Any]
+    assignee_id: str = "u001"
+
+
+def create_external_app(
+    *,
+    system_name: str,
+    system_code: str = "demo_system",
+    interface_type: Literal["workflow", "custom_url"] = "custom_url",
+    workflow_template_id: str | None = None,
+    task_type: str = "general_review",
+    task_form_code: str = "task_result",
+    public_base_url: str = "http://127.0.0.1",
+    database_path: Path,
+    seed_records: list[SeedRecord],
+    seed_tasks: list[SeedTask] | None = None,
+) -> FastAPI:
+    app = FastAPI(title=system_name)
+    ui_dir = Path(__file__).parent / "ui"
+    app.mount("/assets", StaticFiles(directory=ui_dir), name="external-system-assets")
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    seed_tasks = seed_tasks or []
+    _initialize_database(database_path, seed_records, seed_tasks)
+
+    ticket_prefix = "ONBOARDING" if "待接入" in system_name else "CONNECTED"
+
+    @app.get("/", include_in_schema=False)
+    def visual_page() -> FileResponse:
+        return FileResponse(ui_dir / "index.html")
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok", "system": system_name}
+
+    @app.get("/api/system-profile")
+    def system_profile() -> dict[str, str | None]:
+        return {
+            "system_code": system_code,
+            "system_name": system_name,
+            "interface_type": interface_type,
+            "workflow_template_id": workflow_template_id,
+            "task_type": task_type,
+            "task_form_code": task_form_code,
+        }
+
+    @app.get("/api/submissions")
+    def list_submissions() -> dict[str, object]:
+        with _connect(database_path) as connection:
+            rows = connection.execute(
+                """
+                select id, ticket_id, operator_id, form_values, source,
+                       endpoint_type, fd_template_id, created_at
+                from submissions
+                order by id desc
+                """
+            ).fetchall()
+
+        return {
+            "system_name": system_name,
+            "items": [
+                {
+                    "id": row["id"],
+                    "ticket_id": row["ticket_id"],
+                    "operator_id": row["operator_id"],
+                    "form_values": json.loads(row["form_values"]),
+                    "source": row["source"],
+                    "endpoint_type": row["endpoint_type"],
+                    "fd_template_id": row["fd_template_id"],
+                    "created_at": row["created_at"],
+                }
+                for row in rows
+            ],
+        }
+
+    @app.post("/api/forms/submit")
+    def submit_form(
+        docOperator: str = Form(...),
+        formValues: str = Form(...),
+    ) -> dict[str, object]:
+        operator = json.loads(docOperator)
+        values = json.loads(formValues)
+        operator_id = str(operator.get("Id", ""))
+        created_at = datetime.now().isoformat(timespec="seconds")
+
+        with _connect(database_path) as connection:
+            cursor = connection.execute(
+                """
+                insert into submissions(
+                    operator_id, form_values, source, endpoint_type, fd_template_id, created_at
+                )
+                values (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    operator_id,
+                    json.dumps(values, ensure_ascii=False),
+                    "submitted",
+                    "custom_url",
+                    None,
+                    created_at,
+                ),
+            )
+            ticket_id = f"{ticket_prefix}-{cursor.lastrowid:04d}"
+            connection.execute(
+                "update submissions set ticket_id = ? where id = ?",
+                (ticket_id, cursor.lastrowid),
+            )
+            connection.commit()
+
+        return {
+            "success": True,
+            "message": "提交成功",
+            "data": {
+                "id": ticket_id,
+                "operator_id": operator_id,
+                "form_values": values,
+            },
+        }
+
+    if interface_type == "workflow":
+        @app.post("/api/workflows/start")
+        def start_workflow(
+            docSubject: str = Form(...),
+            fdTemplateId: str = Form(...),
+            formValues: str = Form(...),
+            docCreator: str = Form(...),
+            docStatus: str = Form("20"),
+        ) -> dict[str, object]:
+            values = json.loads(formValues)
+            created_at = datetime.now().isoformat(timespec="seconds")
+            with _connect(database_path) as connection:
+                cursor = connection.execute(
+                    """
+                    insert into submissions(
+                        operator_id, form_values, source, endpoint_type,
+                        fd_template_id, created_at
+                    )
+                    values (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        docCreator,
+                        json.dumps(values, ensure_ascii=False),
+                        "submitted",
+                        "workflow",
+                        fdTemplateId,
+                        created_at,
+                    ),
+                )
+                ticket_id = f"WORKFLOW-{cursor.lastrowid:04d}"
+                connection.execute(
+                    "update submissions set ticket_id = ? where id = ?",
+                    (ticket_id, cursor.lastrowid),
+                )
+                connection.commit()
+            return {
+                "success": True,
+                "message": "流程启动成功",
+                "data": {
+                    "id": ticket_id,
+                    "doc_subject": docSubject,
+                    "fd_template_id": fdTemplateId,
+                    "doc_status": docStatus,
+                    "form_values": values,
+                },
+            }
+
+    @app.post("/api/tasks", status_code=201)
+    def create_task(request: CreateTaskRequest) -> dict[str, object]:
+        created_at = datetime.now().isoformat(timespec="seconds")
+        with _connect(database_path) as connection:
+            next_id = connection.execute(
+                "select coalesce(max(id), 0) + 1 as next_id from tasks"
+            ).fetchone()["next_id"]
+            task_id = f"{system_code.upper()}-TASK-{next_id:04d}"
+            connection.execute(
+                """
+                insert into tasks(
+                    task_id, title, task_type, form_code, content, status,
+                    assignee_id, created_at
+                )
+                values (?, ?, ?, ?, ?, 'pending', ?, ?)
+                """,
+                (
+                    task_id,
+                    request.title,
+                    request.task_type,
+                    request.form_code,
+                    json.dumps(request.content, ensure_ascii=False),
+                    request.assignee_id,
+                    created_at,
+                ),
+            )
+            connection.commit()
+        return {
+            "task_id": task_id,
+            "title": request.title,
+            "status": "pending",
+            "assignee_id": request.assignee_id,
+            "created_at": created_at,
+        }
+
+    @app.get("/api/tasks")
+    def list_tasks(
+        operator_id: str | None = None,
+        status: Literal["pending", "completed"] = "pending",
+    ) -> dict[str, object]:
+        where_clause = "status = ?"
+        parameters: tuple[str, ...] = (status,)
+        if operator_id is not None:
+            where_clause = "assignee_id = ? and status = ?"
+            parameters = (operator_id, status)
+
+        with _connect(database_path) as connection:
+            rows = connection.execute(
+                f"""
+                select task_id, title, task_type, form_code, content, status,
+                       assignee_id, result_values, created_at, completed_at
+                from tasks
+                where {where_clause}
+                order by created_at desc
+                """,
+                parameters,
+            ).fetchall()
+
+        return {
+            "system_name": system_name,
+            "items": [
+                {
+                    "task_id": row["task_id"],
+                    "title": row["title"],
+                    "task_type": row["task_type"],
+                    "form_code": row["form_code"],
+                    "content": json.loads(row["content"]),
+                    "status": row["status"],
+                    "assignee_id": row["assignee_id"],
+                    "result_values": (
+                        json.loads(row["result_values"])
+                        if row["result_values"]
+                        else None
+                    ),
+                    "created_at": row["created_at"],
+                    "completed_at": row["completed_at"],
+                }
+                for row in rows
+            ],
+        }
+
+    @app.post("/api/tasks/complete")
+    def complete_task(
+        docOperator: str = Form(...),
+        formValues: str = Form(...),
+    ) -> dict[str, object]:
+        operator = json.loads(docOperator)
+        values = json.loads(formValues)
+        operator_id = str(operator.get("Id", ""))
+        task_id = str(values.get("task_id", ""))
+        completed_at = datetime.now().isoformat(timespec="seconds")
+
+        with _connect(database_path) as connection:
+            task = connection.execute(
+                "select status, assignee_id from tasks where task_id = ?",
+                (task_id,),
+            ).fetchone()
+            if task is None:
+                raise HTTPException(status_code=404, detail="任务不存在")
+            if task["assignee_id"] != operator_id:
+                raise HTTPException(status_code=403, detail="任务不属于当前操作人")
+            if task["status"] != "pending":
+                raise HTTPException(status_code=409, detail="任务已经处理")
+
+            result_values = {key: value for key, value in values.items() if key != "task_id"}
+            connection.execute(
+                """
+                update tasks
+                set status = 'completed', result_values = ?, completed_at = ?
+                where task_id = ?
+                """,
+                (json.dumps(result_values, ensure_ascii=False), completed_at, task_id),
+            )
+            connection.commit()
+
+        return {
+            "success": True,
+            "message": "任务处理完成",
+            "data": {
+                "task_id": task_id,
+                "operator_id": operator_id,
+                "result_values": result_values,
+                "status": "completed",
+            },
+        }
+
+    @app.get("/api/interface-spec")
+    def interface_spec() -> dict[str, str]:
+        return {
+            "system_name": system_name,
+            "description": _build_interface_description(
+                interface_type,
+                public_base_url,
+                workflow_template_id,
+            ),
+        }
+
+    @app.post("/api/demo/reset")
+    def reset_demo() -> dict[str, int]:
+        with _connect(database_path) as connection:
+            deleted_records = connection.execute(
+                "select count(*) as count from submissions"
+            ).fetchone()["count"]
+            connection.execute("delete from submissions")
+            connection.execute(
+                "delete from sqlite_sequence where name = 'submissions'"
+            )
+            for record in seed_records:
+                connection.execute(
+                    """
+                    insert into submissions(ticket_id, operator_id, form_values, source, created_at)
+                    values (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record["ticket_id"],
+                        record["operator_id"],
+                        json.dumps(record["form_values"], ensure_ascii=False),
+                        "seed",
+                        record["created_at"],
+                    ),
+                )
+            connection.execute("delete from tasks")
+            for task in seed_tasks:
+                _insert_seed_task(connection, task)
+            connection.commit()
+            remaining_records = connection.execute(
+                "select count(*) as count from submissions"
+            ).fetchone()["count"]
+
+        return {
+            "deleted_records": deleted_records,
+            "remaining_records": remaining_records,
+        }
+
+    return app
+
+
+def _connect(database_path: Path) -> sqlite3.Connection:
+    connection = sqlite3.connect(database_path)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def _initialize_database(
+    database_path: Path,
+    seed_records: list[SeedRecord],
+    seed_tasks: list[SeedTask],
+) -> None:
+    with _connect(database_path) as connection:
+        connection.execute(
+            """
+            create table if not exists submissions (
+                id integer primary key autoincrement,
+                ticket_id text,
+                operator_id text not null,
+                form_values text not null,
+                source text not null,
+                endpoint_type text not null default 'custom_url',
+                fd_template_id text,
+                created_at text not null
+            )
+            """
+        )
+        _ensure_column(
+            connection,
+            "submissions",
+            "endpoint_type",
+            "text not null default 'custom_url'",
+        )
+        _ensure_column(connection, "submissions", "fd_template_id", "text")
+        connection.execute(
+            """
+            create table if not exists tasks (
+                id integer primary key autoincrement,
+                task_id text not null unique,
+                title text not null,
+                task_type text not null,
+                form_code text not null,
+                content text not null,
+                status text not null,
+                assignee_id text not null,
+                result_values text,
+                created_at text not null,
+                completed_at text
+            )
+            """
+        )
+        existing = connection.execute(
+            "select count(*) as count from submissions where source = 'seed'"
+        ).fetchone()["count"]
+        if existing == 0:
+            for record in seed_records:
+                connection.execute(
+                    """
+                    insert into submissions(ticket_id, operator_id, form_values, source, created_at)
+                    values (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record["ticket_id"],
+                        record["operator_id"],
+                        json.dumps(record["form_values"], ensure_ascii=False),
+                        "seed",
+                        record["created_at"],
+                    ),
+                )
+        existing_tasks = connection.execute(
+            "select count(*) as count from tasks"
+        ).fetchone()["count"]
+        if existing_tasks == 0:
+            for task in seed_tasks:
+                _insert_seed_task(connection, task)
+        connection.commit()
+
+
+def _ensure_column(
+    connection: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    columns = {
+        row["name"] for row in connection.execute(f"pragma table_info({table})").fetchall()
+    }
+    if column not in columns:
+        connection.execute(f"alter table {table} add column {column} {definition}")
+
+
+def _insert_seed_task(connection: sqlite3.Connection, task: SeedTask) -> None:
+    connection.execute(
+        """
+        insert into tasks(
+            task_id, title, task_type, form_code, content, status,
+            assignee_id, created_at
+        )
+        values (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            task["task_id"],
+            task["title"],
+            task["task_type"],
+            task["form_code"],
+            json.dumps(task["content"], ensure_ascii=False),
+            task["status"],
+            task["assignee_id"],
+            task["created_at"],
+        ),
+    )
+
+
+def _build_interface_description(
+    interface_type: Literal["workflow", "custom_url"],
+    public_base_url: str,
+    workflow_template_id: str | None,
+) -> str:
+    if interface_type == "workflow":
+        return (
+            f"POST {public_base_url}/api/workflows/start。流程类接口，Body 使用 form-data。"
+            f"fdTemplateId 固定为 {workflow_template_id or 'purchase_request_001'}。"
+            "参数包含 docSubject、fdTemplateId、formValues、docCreator、docStatus。"
+            'formValues 示例 {"fd_item_name":"包装箱","fd_quantity":20,"fd_reason":"仓库库存不足"}。'
+            "字段说明：fd_item_name 为采购物品，fd_quantity 为数量，fd_reason 为采购原因，均为必填。"
+        )
+    return (
+        f"POST {public_base_url}/api/forms/submit。独立 URL 类接口，Body 使用 form-data。"
+        '入参只有 docOperator 和 formValues。docOperator 示例 {"Id":"u001"}。'
+        'formValues 示例 {"itemName":"签字笔","quantity":10,"usage":"会议使用","applicant":"王五"}。'
+        "字段说明：itemName 为申请物品，quantity 为数量，usage 为用途，applicant 为申请人，均为必填。"
+    )
