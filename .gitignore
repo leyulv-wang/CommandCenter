@@ -29,3 +29,4 @@ app/data/form_templates/*.json
 .vscode/
 .DS_Store
 Thumbs.db
+.superpowers/
