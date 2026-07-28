@@ -160,53 +160,32 @@ class LocalFixtureService:
         }
 
     def prepare(self, fixture: dict[str, Any]) -> dict[str, Any]:
-        for system_code in ("connected_system", "onboarding_system"):
-            response = self.client.post(
-                f"{self.base_urls[system_code]}/api/demo/reset"
-            )
-            response.raise_for_status()
-        source = fixture.get("source_task", {})
         response = self.client.post(
-            f"{self.base_urls['onboarding_system']}/api/tasks",
-            json={
-                "title": source.get("title", "CommandCenter 自动测试任务"),
-                "task_type": "office_supply_review",
-                "form_code": "office_supply_task_result",
-                "content": source.get(
-                    "content",
-                    {
-                        "item_name": "自动测试物品",
-                        "quantity": 1,
-                        "usage": "CommandCenter 无害测试",
-                        "applicant": "测试员工",
-                    },
-                ),
-                "assignee_id": "u001",
-            },
+            f"{self.base_urls['connected_system']}/api/demo/reset"
         )
         response.raise_for_status()
-        task_id = response.json()["task_id"]
-        detail = self.client.get(
-            f"{self.base_urls['onboarding_system']}/api/tasks/{task_id}"
-        )
-        detail.raise_for_status()
+        source = fixture.get("source_task", {})
         return {
-            **detail.json(),
-            "system_code": "onboarding_system",
+            "task_id": source.get("task_id", f"purchase-test-{uuid4()}"),
+            "system_code": "connected_system",
+            "content": source.get(
+                "content",
+                {
+                    "applicant": "测试员工",
+                    "item_name": "自动测试物品",
+                    "quantity": 1,
+                    "usage": "CommandCenter 无害测试",
+                },
+            ),
         }
 
     def observe(self, task: dict[str, Any]) -> dict[str, Any]:
-        task_response = self.client.get(
-            f"{self.base_urls['onboarding_system']}/api/tasks/{task['task_id']}"
-        )
-        task_response.raise_for_status()
         submissions_response = self.client.get(
             f"{self.base_urls['connected_system']}/api/submissions"
         )
         submissions_response.raise_for_status()
         submissions = submissions_response.json().get("items", [])
         return {
-            "task": task_response.json(),
             "purchase_requests": submissions,
             "purchase_count": len(submissions),
         }

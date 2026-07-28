@@ -85,25 +85,13 @@ def test_inconclusive_verification_blocks_publication_result():
     assert result["unknown_side_effect"] is True
 
 
-def test_local_fixture_resets_both_systems_and_observes_business_state():
+def test_local_fixture_resets_only_procurement_and_returns_purchase_inputs():
     calls: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append((request.method, request.url.path))
-        if request.url.path == "/api/tasks" and request.method == "POST":
-            return httpx.Response(201, json={"task_id": "TEST-TASK-1"})
-        if request.url.path == "/api/tasks/TEST-TASK-1":
-            return httpx.Response(
-                200,
-                json={
-                    "task_id": "TEST-TASK-1",
-                    "status": "processing",
-                    "content": {"item_name": "测试签字笔", "quantity": 7},
-                    "result_values": {"purchase_request_id": "WORKFLOW-1"},
-                },
-            )
         if request.url.path == "/api/submissions":
-            return httpx.Response(200, json={"items": [{"ticket_id": "WORKFLOW-1"}]})
+            return httpx.Response(200, json={"items": []})
         return httpx.Response(200, json={"ok": True})
 
     fixture = LocalFixtureService(
@@ -117,16 +105,21 @@ def test_local_fixture_resets_both_systems_and_observes_business_state():
     task = fixture.prepare(
         {
             "source_task": {
-                "title": "测试库存不足",
-                "content": {"item_name": "测试签字笔", "quantity": 7},
+                "content": {
+                    "applicant": "测试员工",
+                    "item_name": "打印纸",
+                    "quantity": 10,
+                    "usage": "行政采购",
+                },
             }
         }
     )
     observed = fixture.observe(task)
 
-    assert calls[:2] == [
+    assert calls == [
         ("POST", "/api/demo/reset"),
-        ("POST", "/api/demo/reset"),
+        ("GET", "/api/submissions"),
     ]
-    assert task["content"]["quantity"] == 7
-    assert observed["purchase_count"] == 1
+    assert task["system_code"] == "connected_system"
+    assert task["content"]["item_name"] == "打印纸"
+    assert observed["purchase_count"] == 0
