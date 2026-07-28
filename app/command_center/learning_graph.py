@@ -6,13 +6,13 @@ from typing import Any, Protocol, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from app.command_center.repository import CommandCenterRepository
-from app.command_center.schemas import SkillDefinition
+from app.command_center.schemas import SkillDefinition, TestPlan
 
 
 class LearningAgents(Protocol):
     def analyze_demonstration(self, trace: Any, catalog: Any) -> Any: ...
     def compile_skill(self, analysis: Any, trace: Any, catalog: Any) -> SkillDefinition: ...
-    def design_tests(self, skill: SkillDefinition) -> list[dict[str, Any]]: ...
+    def design_tests(self, skill: SkillDefinition) -> TestPlan | list[dict[str, Any]]: ...
 
 
 class SkillTester(Protocol):
@@ -61,9 +61,15 @@ def build_learning_graph(dependencies: LearningDependencies):
             dependencies.catalog,
         ).model_copy(update={"status": "testing"})
         dependencies.repository.save_candidate_skill(skill)
+        designed = dependencies.agents.design_tests(skill)
+        cases = (
+            [case.model_dump(mode="json") for case in designed.cases]
+            if isinstance(designed, TestPlan)
+            else designed
+        )
         return {
             "candidate_skill": skill,
-            "test_plan": dependencies.agents.design_tests(skill),
+            "test_plan": cases,
             "final_status": "testing",
         }
 
