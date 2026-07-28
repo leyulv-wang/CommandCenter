@@ -78,6 +78,22 @@ class ToolCatalog:
         except KeyError as exc:
             raise KeyError(f"Tool is not allowlisted: {tool_id}") from exc
 
+    def to_agent_payload(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "tools": [
+                {
+                    "tool_id": tool.tool_id,
+                    "system_code": tool.system_code,
+                    "operation_id": tool.operation_id,
+                    "method": tool.method,
+                    "path_template": tool.path_template,
+                    "content_type": tool.content_type,
+                }
+                for tool in self._tools.values()
+            ],
+        }
+
     def match_exchange(
         self,
         system_code: str,

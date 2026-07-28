@@ -78,6 +78,8 @@ class StructuredModel:
 
 
 def _jsonable(value: Any) -> Any:
+    if hasattr(value, "to_agent_payload"):
+        return _jsonable(value.to_agent_payload())
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     if isinstance(value, dict):

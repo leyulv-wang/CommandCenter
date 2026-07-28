@@ -4,6 +4,7 @@ from uuid import uuid4
 from app.command_center.agents import AgentSuite
 from app.command_center.model import StructuredModel
 from app.command_center.schemas import DemonstrationAnalysis, TestPlan as SkillTestPlan
+from app.command_center.tool_catalog import ToolCatalog
 from tests.test_command_center_schemas import valid_skill_payload
 
 
@@ -90,3 +91,43 @@ def test_agent_suite_produces_three_required_test_categories():
         "parameter_variation",
         "idempotency",
     }
+
+
+def test_structured_model_serializes_tool_catalog_for_agent_prompt():
+    captured = {}
+
+    def complete(messages):
+        captured["payload"] = json.loads(messages[1]["content"])
+        return json.dumps(
+            {
+                "summary": "没有业务动作",
+                "business_actions": [],
+                "ignored_ui_event_ids": [],
+                "uncertainties": [],
+                "compilable": False,
+            }
+        )
+
+    catalog = ToolCatalog.from_openapi_documents(
+        {
+            "connected_system": {
+                "paths": {
+                    "/api/workflows/start": {
+                        "post": {"operationId": "start_workflow"}
+                    }
+                }
+            }
+        },
+        {"connected_system": "http://127.0.0.1:8101"},
+        {("connected_system", "start_workflow")},
+    )
+
+    StructuredModel(complete).generate(
+        DemonstrationAnalysis,
+        "分析演示",
+        {"catalog": catalog},
+    )
+
+    assert captured["payload"]["catalog"]["tools"][0]["tool_id"] == (
+        "connected_system:start_workflow"
+    )
