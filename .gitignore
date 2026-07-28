@@ -30,3 +30,4 @@ app/data/form_templates/*.json
 .DS_Store
 Thumbs.db
 .superpowers/
+.worktrees/
