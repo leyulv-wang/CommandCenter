@@ -1,5 +1,6 @@
 const centralBase = 'http://127.0.0.1:8000'
 let profile = null
+let pendingTasks = []
 
 const byId = (id) => document.getElementById(id)
 
@@ -61,11 +62,57 @@ async function refreshData() {
     request('/api/interface-spec'),
   ])
   renderList('pending-list', pending.items)
+  pendingTasks = pending.items
+  byId('purchase-link-task').innerHTML = pendingTasks
+    .map((item) => `<option value="${escapeHtml(item.task_id)}">${escapeHtml(item.title)}（${escapeHtml(item.task_id)}）</option>`)
+    .join('')
   renderList('completed-list', completed.items, true)
   renderList('submission-list', submissions.items)
   byId('task-count').textContent = String(pending.items.length + completed.items.length)
   byId('interface-description').textContent = spec.description
   await refreshStatus()
+}
+
+function idempotencyKey(action, objectId = crypto.randomUUID()) {
+  return `demo:${profile.system_code}:${objectId}:${action}`
+}
+
+async function createPurchase(event) {
+  event.preventDefault()
+  const itemName = byId('purchase-item-name').value
+  const form = new FormData()
+  form.set('docSubject', `采购申请：${itemName}`)
+  form.set('fdTemplateId', profile.workflow_template_id)
+  form.set('formValues', JSON.stringify({
+    fd_item_name: itemName,
+    fd_quantity: Number(byId('purchase-quantity').value),
+    fd_reason: byId('purchase-reason').value,
+  }))
+  form.set('docCreator', 'u001')
+  form.set('docStatus', '20')
+  const response = await request('/api/workflows/start', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey('create-purchase') },
+    body: form,
+  })
+  byId('purchase-result').textContent = `采购单号：${response.data.id}`
+  await refreshData()
+}
+
+async function linkPurchase(event) {
+  event.preventDefault()
+  const taskId = byId('purchase-link-task').value
+  const purchaseRequestId = byId('purchase-link-id').value
+  const response = await request(`/api/tasks/${encodeURIComponent(taskId)}/purchase-link`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': idempotencyKey('link-purchase', taskId),
+    },
+    body: JSON.stringify({ purchase_request_id: purchaseRequestId }),
+  })
+  byId('purchase-link-result').textContent = `已回写：${response.result_values.purchase_request_id}`
+  await refreshData()
 }
 
 async function createTask(event) {
@@ -121,6 +168,10 @@ async function init() {
     ? 'Workflow Business System'
     : 'Custom URL Business System'
   byId('task-form').addEventListener('submit', (event) => createTask(event).catch((error) => showMessage(error.message)))
+  byId('purchase-operation-form').addEventListener('submit', (event) => createPurchase(event).catch((error) => showMessage(error.message)))
+  byId('purchase-link-form').addEventListener('submit', (event) => linkPurchase(event).catch((error) => showMessage(error.message)))
+  byId('purchase-operation').hidden = profile.interface_type !== 'workflow'
+  byId('purchase-link-operation').hidden = profile.system_code !== 'onboarding_system'
   byId('refresh-button').addEventListener('click', () => refreshData().catch((error) => showMessage(error.message)))
   byId('reset-button').addEventListener('click', () => resetSystem().catch((error) => showMessage(error.message)))
   initTabs()

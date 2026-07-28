@@ -145,6 +145,8 @@ def test_external_system_serves_visual_page_and_profile(tmp_path: Path):
 
     assert page.status_code == 200
     assert "business-system-app" in page.text
+    assert "purchase-operation-form" in page.text
+    assert "purchase-link-form" in page.text
     assert profile.status_code == 200
     assert profile.json() == {
         "system_code": "connected_system",
@@ -319,3 +321,64 @@ def test_onboarding_system_exposes_and_completes_office_supply_tasks(tmp_path: P
         params={"operator_id": "u001", "status": "completed"},
     ).json()["items"]
     assert any(item["task_id"] == task["task_id"] for item in completed_items)
+
+
+def test_workflow_submission_reuses_response_for_same_idempotency_key(tmp_path: Path):
+    app = create_external_app(
+        system_name="采购业务系统",
+        system_code="connected_system",
+        interface_type="workflow",
+        workflow_template_id="purchase_request_001",
+        database_path=tmp_path / "connected.sqlite3",
+        seed_records=[],
+        seed_tasks=[],
+    )
+    client = TestClient(app)
+    payload = {
+        "docSubject": "采购申请：打印纸",
+        "fdTemplateId": "purchase_request_001",
+        "formValues": '{"fd_item_name":"打印纸","fd_quantity":5,"fd_reason":"项目使用"}',
+        "docCreator": "u001",
+        "docStatus": "20",
+    }
+    headers = {"Idempotency-Key": "skill-1:office-task-1:create-purchase"}
+
+    first = client.post("/api/workflows/start", data=payload, headers=headers)
+    second = client.post("/api/workflows/start", data=payload, headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json() == first.json()
+    assert len(client.get("/api/submissions").json()["items"]) == 1
+
+
+def test_office_task_links_purchase_request_idempotently(tmp_path: Path):
+    app = create_external_app(
+        system_name="办公用品系统",
+        system_code="onboarding_system",
+        database_path=tmp_path / "onboarding.sqlite3",
+        seed_records=[],
+        seed_tasks=onboarding_main.seed_tasks(),
+    )
+    client = TestClient(app)
+    headers = {"Idempotency-Key": "skill-1:office-task-1:link-purchase"}
+    payload = {"purchase_request_id": "WORKFLOW-0001"}
+
+    first = client.post(
+        "/api/tasks/OFFICE-TASK-0001/purchase-link",
+        json=payload,
+        headers=headers,
+    )
+    second = client.post(
+        "/api/tasks/OFFICE-TASK-0001/purchase-link",
+        json=payload,
+        headers=headers,
+    )
+
+    assert first.status_code == 200
+    assert second.json() == first.json()
+    assert first.json()["status"] == "processing"
+    assert first.json()["result_values"]["purchase_request_id"] == "WORKFLOW-0001"
+    detail = client.get("/api/tasks/OFFICE-TASK-0001")
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "processing"

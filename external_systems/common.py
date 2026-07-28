@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, Form, HTTPException
+from fastapi import FastAPI, Form, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -22,6 +22,10 @@ class CreateTaskRequest(BaseModel):
     form_code: str
     content: dict[str, Any]
     assignee_id: str = "u001"
+
+
+class PurchaseLinkRequest(BaseModel):
+    purchase_request_id: str
 
 
 def create_external_app(
@@ -98,6 +102,7 @@ def create_external_app(
     def submit_form(
         docOperator: str = Form(...),
         formValues: str = Form(...),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> dict[str, object]:
         operator = json.loads(docOperator)
         values = json.loads(formValues)
@@ -105,6 +110,13 @@ def create_external_app(
         created_at = datetime.now().isoformat(timespec="seconds")
 
         with _connect(database_path) as connection:
+            existing_response = _load_idempotent_response(
+                connection,
+                "submit_form",
+                idempotency_key,
+            )
+            if existing_response is not None:
+                return existing_response
             cursor = connection.execute(
                 """
                 insert into submissions(
@@ -126,17 +138,23 @@ def create_external_app(
                 "update submissions set ticket_id = ? where id = ?",
                 (ticket_id, cursor.lastrowid),
             )
+            response = {
+                "success": True,
+                "message": "提交成功",
+                "data": {
+                    "id": ticket_id,
+                    "operator_id": operator_id,
+                    "form_values": values,
+                },
+            }
+            _store_idempotent_response(
+                connection,
+                "submit_form",
+                idempotency_key,
+                response,
+            )
             connection.commit()
-
-        return {
-            "success": True,
-            "message": "提交成功",
-            "data": {
-                "id": ticket_id,
-                "operator_id": operator_id,
-                "form_values": values,
-            },
-        }
+            return response
 
     if interface_type == "workflow":
         @app.post("/api/workflows/start")
@@ -146,10 +164,18 @@ def create_external_app(
             formValues: str = Form(...),
             docCreator: str = Form(...),
             docStatus: str = Form("20"),
+            idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
         ) -> dict[str, object]:
             values = json.loads(formValues)
             created_at = datetime.now().isoformat(timespec="seconds")
             with _connect(database_path) as connection:
+                existing_response = _load_idempotent_response(
+                    connection,
+                    "start_workflow",
+                    idempotency_key,
+                )
+                if existing_response is not None:
+                    return existing_response
                 cursor = connection.execute(
                     """
                     insert into submissions(
@@ -172,18 +198,25 @@ def create_external_app(
                     "update submissions set ticket_id = ? where id = ?",
                     (ticket_id, cursor.lastrowid),
                 )
+                response = {
+                    "success": True,
+                    "message": "流程启动成功",
+                    "data": {
+                        "id": ticket_id,
+                        "doc_subject": docSubject,
+                        "fd_template_id": fdTemplateId,
+                        "doc_status": docStatus,
+                        "form_values": values,
+                    },
+                }
+                _store_idempotent_response(
+                    connection,
+                    "start_workflow",
+                    idempotency_key,
+                    response,
+                )
                 connection.commit()
-            return {
-                "success": True,
-                "message": "流程启动成功",
-                "data": {
-                    "id": ticket_id,
-                    "doc_subject": docSubject,
-                    "fd_template_id": fdTemplateId,
-                    "doc_status": docStatus,
-                    "form_values": values,
-                },
-            }
+                return response
 
     @app.post("/api/tasks", status_code=201)
     def create_task(request: CreateTaskRequest) -> dict[str, object]:
@@ -223,7 +256,7 @@ def create_external_app(
     @app.get("/api/tasks")
     def list_tasks(
         operator_id: str | None = None,
-        status: Literal["pending", "completed"] = "pending",
+        status: Literal["pending", "processing", "completed"] = "pending",
     ) -> dict[str, object]:
         where_clause = "status = ?"
         parameters: tuple[str, ...] = (status,)
@@ -265,6 +298,66 @@ def create_external_app(
                 for row in rows
             ],
         }
+
+    @app.get("/api/tasks/{task_id}")
+    def get_task(task_id: str) -> dict[str, object]:
+        with _connect(database_path) as connection:
+            row = connection.execute(
+                """
+                select task_id, title, task_type, form_code, content, status,
+                       assignee_id, result_values, created_at, completed_at
+                from tasks
+                where task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        return _task_row_to_dict(row)
+
+    @app.post("/api/tasks/{task_id}/purchase-link")
+    def link_purchase_request(
+        task_id: str,
+        request: PurchaseLinkRequest,
+        idempotency_key: str = Header(alias="Idempotency-Key"),
+    ) -> dict[str, object]:
+        operation = f"link_purchase_request:{task_id}"
+        with _connect(database_path) as connection:
+            existing_response = _load_idempotent_response(
+                connection,
+                operation,
+                idempotency_key,
+            )
+            if existing_response is not None:
+                return existing_response
+            task = connection.execute(
+                "select task_id from tasks where task_id = ?",
+                (task_id,),
+            ).fetchone()
+            if task is None:
+                raise HTTPException(status_code=404, detail="任务不存在")
+            result_values = {"purchase_request_id": request.purchase_request_id}
+            connection.execute(
+                """
+                update tasks
+                set status = 'processing', result_values = ?, completed_at = null
+                where task_id = ?
+                """,
+                (json.dumps(result_values, ensure_ascii=False), task_id),
+            )
+            response = {
+                "task_id": task_id,
+                "status": "processing",
+                "result_values": result_values,
+            }
+            _store_idempotent_response(
+                connection,
+                operation,
+                idempotency_key,
+                response,
+            )
+            connection.commit()
+            return response
 
     @app.post("/api/tasks/complete")
     def complete_task(
@@ -347,6 +440,7 @@ def create_external_app(
                     ),
                 )
             connection.execute("delete from tasks")
+            connection.execute("delete from idempotency_records")
             for task in seed_tasks:
                 _insert_seed_task(connection, task)
             connection.commit()
@@ -385,6 +479,16 @@ def _initialize_database(
                 endpoint_type text not null default 'custom_url',
                 fd_template_id text,
                 created_at text not null
+            )
+            """
+        )
+        connection.execute(
+            """
+            create table if not exists idempotency_records (
+                operation text not null,
+                idempotency_key text not null,
+                response_json text not null,
+                primary key(operation, idempotency_key)
             )
             """
         )
@@ -471,6 +575,56 @@ def _insert_seed_task(connection: sqlite3.Connection, task: SeedTask) -> None:
             task["assignee_id"],
             task["created_at"],
         ),
+    )
+
+
+def _task_row_to_dict(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "task_id": row["task_id"],
+        "title": row["title"],
+        "task_type": row["task_type"],
+        "form_code": row["form_code"],
+        "content": json.loads(row["content"]),
+        "status": row["status"],
+        "assignee_id": row["assignee_id"],
+        "result_values": json.loads(row["result_values"]) if row["result_values"] else None,
+        "created_at": row["created_at"],
+        "completed_at": row["completed_at"],
+    }
+
+
+def _load_idempotent_response(
+    connection: sqlite3.Connection,
+    operation: str,
+    idempotency_key: str | None,
+) -> dict[str, object] | None:
+    if not idempotency_key:
+        return None
+    row = connection.execute(
+        """
+        select response_json
+        from idempotency_records
+        where operation = ? and idempotency_key = ?
+        """,
+        (operation, idempotency_key),
+    ).fetchone()
+    return json.loads(row["response_json"]) if row else None
+
+
+def _store_idempotent_response(
+    connection: sqlite3.Connection,
+    operation: str,
+    idempotency_key: str | None,
+    response: dict[str, object],
+) -> None:
+    if not idempotency_key:
+        return
+    connection.execute(
+        """
+        insert into idempotency_records(operation, idempotency_key, response_json)
+        values (?, ?, ?)
+        """,
+        (operation, idempotency_key, json.dumps(response, ensure_ascii=False)),
     )
 
 

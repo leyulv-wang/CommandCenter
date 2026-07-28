@@ -23,6 +23,7 @@
       <main>
         <nav class="tabs" aria-label="业务视图">
           <button class="tab active" data-tab="tasks">任务派发</button>
+          <button class="tab" data-tab="operations">业务操作</button>
           <button class="tab" data-tab="submissions">申请记录</button>
           <button class="tab" data-tab="interface">接口说明</button>
         </nav>
@@ -48,6 +49,29 @@
               </div>
             </section>
           </div>
+        </section>
+
+        <section id="operations-panel" class="tab-panel">
+          <section id="purchase-operation" class="panel operation-panel">
+            <h2>创建采购申请</h2>
+            <form id="purchase-operation-form">
+              <label>物品名称<input id="purchase-item-name" data-testid="purchase-item-name" required /></label>
+              <label>数量<input id="purchase-quantity" data-testid="purchase-quantity" type="number" min="1" value="1" required /></label>
+              <label>采购原因<textarea id="purchase-reason" data-testid="purchase-reason" rows="3" required></textarea></label>
+              <button type="submit" class="primary" data-testid="create-purchase">创建采购申请</button>
+            </form>
+            <p id="purchase-result" class="operation-result"></p>
+          </section>
+
+          <section id="purchase-link-operation" class="panel operation-panel">
+            <h2>回写采购单号</h2>
+            <form id="purchase-link-form">
+              <label>办公用品任务<select id="purchase-link-task" data-testid="purchase-link-task" required></select></label>
+              <label>采购单号<input id="purchase-link-id" data-testid="purchase-link-id" required /></label>
+              <button type="submit" class="primary" data-testid="link-purchase">回写采购单号</button>
+            </form>
+            <p id="purchase-link-result" class="operation-result"></p>
+          </section>
         </section>
 
         <section id="submissions-panel" class="tab-panel">

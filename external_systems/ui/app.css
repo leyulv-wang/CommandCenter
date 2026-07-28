@@ -23,6 +23,8 @@ main { margin: 0 auto; max-width: 1400px; padding: 24px 30px 40px; }
 .tab.active { border-bottom-color: #1769aa; color: #1769aa; font-weight: 600; }
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
+.operation-panel { margin-bottom: 18px; max-width: 720px; }
+.operation-result { color: #0f766e; font-weight: 700; min-height: 24px; }
 .layout { display: grid; gap: 18px; grid-template-columns: 360px minmax(0, 1fr); }
 .panel { background: #fff; border: 1px solid #dce3ec; border-radius: 8px; padding: 20px; }
 form { display: grid; gap: 14px; }
