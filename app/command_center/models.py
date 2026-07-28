@@ -31,3 +31,19 @@ class SkillTestRow(Base):
     category: Mapped[str] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(32))
     payload_json: Mapped[str] = mapped_column(Text)
+
+
+class RecordingRow(Base):
+    __tablename__ = "recordings"
+
+    recording_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    payload_json: Mapped[str] = mapped_column(Text)
+
+
+class TaskRunRow(Base):
+    __tablename__ = "task_runs"
+
+    run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    payload_json: Mapped[str] = mapped_column(Text)

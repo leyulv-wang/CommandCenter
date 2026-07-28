@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import Literal
 
 import httpx
@@ -6,6 +7,25 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent.graph import form_execution_graph
+from app.command_center.agents import AgentSuite
+from app.command_center.execution_graph import (
+    ExecutionDependencies,
+    LocalBusinessReader,
+    build_execution_graph,
+)
+from app.command_center.learning_graph import LearningDependencies, build_learning_graph
+from app.command_center.model import StructuredModel
+from app.command_center.recorder import RecorderService
+from app.command_center.repository import CommandCenterRepository
+from app.command_center.router import create_router
+from app.command_center.service import CommandCenterService
+from app.command_center.testing import (
+    HarmlessTestService,
+    LocalFixtureService,
+    SkillRunner,
+)
+from app.command_center.tool_catalog import ToolCatalog
+from app.command_center.tool_executor import ToolExecutor
 from app.ai_config.generator import generate_form_config
 from app.ai_config.schemas import (
     GenerateFormConfigRequest,
@@ -18,6 +38,7 @@ from app.forms.schemas import FormSubmission, FormTemplate
 
 app = FastAPI(title="Configurable Form Agent MVP")
 external_system_client = ExternalSystemClient()
+_command_center_service: CommandCenterService | None = None
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,6 +56,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def get_command_center_service() -> CommandCenterService:
+    global _command_center_service
+    if _command_center_service is None:
+        _command_center_service = _build_command_center_service()
+    return _command_center_service
+
+
+app.include_router(create_router(get_command_center_service))
 
 
 @app.get("/health")
@@ -215,6 +246,71 @@ def _reset_demo_system(system_code: str) -> dict[str, object]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"外部系统重置失败：{exc}") from exc
+
+
+def _build_command_center_service() -> CommandCenterService:
+    base_urls = {
+        "connected_system": "http://127.0.0.1:8101",
+        "onboarding_system": "http://127.0.0.1:8102",
+    }
+    client = httpx.Client(timeout=30)
+    documents = {
+        system_code: client.get(f"{base_url}/openapi.json").raise_for_status().json()
+        for system_code, base_url in base_urls.items()
+    }
+    allowlist = {
+        ("connected_system", "start_workflow_api_workflows_start_post"),
+        ("connected_system", "list_submissions_api_submissions_get"),
+        ("onboarding_system", "list_tasks_api_tasks_get"),
+        ("onboarding_system", "get_task_api_tasks__task_id__get"),
+        (
+            "onboarding_system",
+            "link_purchase_request_api_tasks__task_id__purchase_link_post",
+        ),
+    }
+    catalog = ToolCatalog.from_openapi_documents(
+        documents,
+        base_urls,
+        allowlist,
+    )
+    repository = CommandCenterRepository(
+        "sqlite:///app/data/command_center.sqlite3"
+    )
+    agents = AgentSuite(StructuredModel.from_environment())
+    runner = SkillRunner(ToolExecutor(catalog, client))
+    fixture = LocalFixtureService(client=client, base_urls=base_urls)
+    harmless_tests = HarmlessTestService(
+        fixture_service=fixture,
+        runner=runner,
+        verifier=agents,
+    )
+    learning_graph = build_learning_graph(
+        LearningDependencies(
+            repository=repository,
+            agents=agents,
+            tester=harmless_tests,
+            catalog=catalog,
+        )
+    )
+    business_reader = LocalBusinessReader(client, base_urls)
+    execution_graph = build_execution_graph(
+        ExecutionDependencies(
+            skills=repository.list_published_skills,
+            business_reader=business_reader,
+            agents=agents,
+            runner=runner,
+        )
+    )
+    recorder = RecorderService(
+        catalog,
+        Path("app/data/command_center_evidence"),
+    )
+    return CommandCenterService(
+        repository=repository,
+        recorder=recorder,
+        learning_graph=learning_graph,
+        execution_graph=execution_graph,
+    )
 
 
 @app.post("/ai/form-config/generate", response_model=GenerateFormConfigResponse)

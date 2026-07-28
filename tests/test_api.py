@@ -203,3 +203,27 @@ def test_ai_form_config_returns_readable_error_when_model_fails(monkeypatch):
 
     assert response.status_code == 502
     assert "模型服务调用失败" in response.json()["detail"]
+
+
+def test_main_app_exposes_command_center_recording_api(monkeypatch):
+    class Service:
+        def create_recording(self, request):
+            return {
+                "recording_id": "00000000-0000-0000-0000-000000000001",
+                "status": "created",
+                "objective": request.objective,
+            }
+
+    monkeypatch.setattr(main_module, "_command_center_service", Service(), raising=False)
+
+    response = client.post(
+        "/recordings",
+        json={
+            "objective": "演示采购回写",
+            "source_system": "onboarding_system",
+            "source_task_id": "OFFICE-TASK-0001",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "created"

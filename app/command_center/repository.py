@@ -7,7 +7,12 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.command_center.database import Base, build_session_factory
-from app.command_center.models import SkillTestRow, SkillVersionRow
+from app.command_center.models import (
+    RecordingRow,
+    SkillTestRow,
+    SkillVersionRow,
+    TaskRunRow,
+)
 from app.command_center.schemas import SkillDefinition
 
 
@@ -108,3 +113,70 @@ class CommandCenterRepository:
                 select(SkillVersionRow).where(SkillVersionRow.status == "published")
             ).all()
             return [SkillDefinition.model_validate_json(row.payload_json) for row in rows]
+
+    def get_skill(self, skill_id: UUID) -> SkillDefinition:
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(SkillVersionRow)
+                .where(SkillVersionRow.skill_id == str(skill_id))
+                .order_by(SkillVersionRow.version.desc())
+            )
+            if row is None:
+                raise KeyError(f"Skill not found: {skill_id}")
+            return SkillDefinition.model_validate_json(row.payload_json)
+
+    def save_recording(
+        self,
+        recording_id: UUID,
+        payload: dict[str, object],
+    ) -> None:
+        self._save_runtime_row(
+            RecordingRow,
+            "recording_id",
+            str(recording_id),
+            payload,
+        )
+
+    def get_recording(self, recording_id: UUID) -> dict[str, object]:
+        return self._get_runtime_row(
+            RecordingRow,
+            RecordingRow.recording_id,
+            str(recording_id),
+        )
+
+    def save_task_run(self, run_id: UUID, payload: dict[str, object]) -> None:
+        self._save_runtime_row(TaskRunRow, "run_id", str(run_id), payload)
+
+    def get_task_run(self, run_id: UUID) -> dict[str, object]:
+        return self._get_runtime_row(TaskRunRow, TaskRunRow.run_id, str(run_id))
+
+    def _save_runtime_row(
+        self,
+        row_type,
+        id_name: str,
+        identifier: str,
+        payload: dict[str, object],
+    ) -> None:
+        with self.session_factory() as session:
+            row = session.get(row_type, identifier)
+            serialized = json.dumps(payload, ensure_ascii=False)
+            if row is None:
+                row = row_type(
+                    **{
+                        id_name: identifier,
+                        "status": str(payload["status"]),
+                        "payload_json": serialized,
+                    }
+                )
+                session.add(row)
+            else:
+                row.status = str(payload["status"])
+                row.payload_json = serialized
+            session.commit()
+
+    def _get_runtime_row(self, row_type, id_column, identifier: str) -> dict[str, object]:
+        with self.session_factory() as session:
+            row = session.scalar(select(row_type).where(id_column == identifier))
+            if row is None:
+                raise KeyError(identifier)
+            return json.loads(row.payload_json)
