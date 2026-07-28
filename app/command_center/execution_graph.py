@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol, TypedDict
 from uuid import uuid4
@@ -45,28 +46,23 @@ class LocalBusinessReader:
         }
 
     def search_tasks(self, user_request: str) -> list[dict[str, Any]]:
-        response = self.client.get(
-            f"{self.base_urls['onboarding_system']}/api/tasks",
-            params={"operator_id": "u001", "status": "pending"},
-        )
-        response.raise_for_status()
+        request_key = sha256(user_request.strip().encode("utf-8")).hexdigest()[:16]
         return [
-            {**task, "system_code": "onboarding_system"}
-            for task in response.json().get("items", [])
+            {
+                "system_code": "connected_system",
+                "task_id": f"purchase-request-{request_key}",
+                "content": {},
+                "user_request": user_request,
+            }
         ]
 
     def observe(self, task: dict[str, Any]) -> dict[str, Any]:
-        task_response = self.client.get(
-            f"{self.base_urls['onboarding_system']}/api/tasks/{task['task_id']}"
-        )
-        task_response.raise_for_status()
         purchase_response = self.client.get(
             f"{self.base_urls['connected_system']}/api/submissions"
         )
         purchase_response.raise_for_status()
         purchases = purchase_response.json().get("items", [])
         return {
-            "task": task_response.json(),
             "purchase_requests": purchases,
             "purchase_count": len(purchases),
         }
