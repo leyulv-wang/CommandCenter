@@ -6,6 +6,7 @@ from app.command_center.model import StructuredModel
 from app.command_center.schemas import (
     DemonstrationAnalysis,
     SkillDefinition,
+    TaskMatchDecision,
     TestPlan,
     VerificationResult,
 )
@@ -70,5 +71,24 @@ class AgentSuite:
                 "skill": skill,
                 "step_results": step_results,
                 "observed_state": observed_state,
+            },
+        )
+
+    def match_request(
+        self,
+        user_request: str,
+        tasks: list[dict[str, Any]],
+        skills: list[SkillDefinition],
+    ) -> TaskMatchDecision:
+        return self.model.generate(
+            TaskMatchDecision,
+            (
+                "你是任务匹配智能体。根据员工自然语言、候选业务对象和已发布 Skill，"
+                "返回所有仍可能匹配的任务编号及唯一 Skill。不能在多个对象间私自选择。"
+            ),
+            {
+                "user_request": user_request,
+                "tasks": tasks,
+                "skills": skills,
             },
         )

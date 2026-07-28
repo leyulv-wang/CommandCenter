@@ -186,3 +186,10 @@ class VerificationResult(BaseModel):
     side_effects: dict[str, Any] = Field(default_factory=dict)
     duplicate_detected: bool = False
     summary: str
+
+
+class TaskMatchDecision(BaseModel):
+    candidate_task_ids: list[str]
+    selected_skill_id: UUID
+    literals: dict[str, Any] = Field(default_factory=dict)
+    summary: str
