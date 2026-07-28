@@ -43,9 +43,9 @@ def test_service_connects_recording_stop_to_learning_graph(tmp_path):
     )
     created = service.create_recording(
         CreateRecordingRequest(
-            objective="演示采购回写",
-            source_system="onboarding_system",
-            source_task_id="OFFICE-1",
+            objective="创建采购申请",
+            source_system="connected_system",
+            source_task_id="purchase-demonstration",
         )
     )
 
@@ -54,6 +54,7 @@ def test_service_connects_recording_stop_to_learning_graph(tmp_path):
     asyncio.run(service.start_recording(created["recording_id"]))
     stopped = asyncio.run(service.stop_recording(created["recording_id"]))
 
+    assert recorder.started[1] == "http://127.0.0.1:8101"
     assert stopped["status"] == "published"
     assert learning.state["trace"]["objective"] == "演示采购回写"
     assert repository.get_recording(created["recording_id"])["status"] == "published"

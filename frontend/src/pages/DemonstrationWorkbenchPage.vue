@@ -21,10 +21,7 @@
         <template #header>本次演示</template>
         <el-form label-position="top">
           <el-form-item label="演示目标">
-            <el-input v-model="objective" placeholder="例如：创建采购申请并把采购单号回写到办公用品任务" />
-          </el-form-item>
-          <el-form-item label="测试任务">
-            <el-input v-model="sourceTaskId" placeholder="OFFICE-TASK-0001" />
+            <el-input v-model="objective" placeholder="例如：创建采购申请" />
           </el-form-item>
           <div class="action-row">
             <el-button
@@ -64,8 +61,7 @@ import { ElMessage } from 'element-plus'
 import { createRecording, startRecording, stopRecording } from '../api/commandCenter'
 import type { RecordingStatus } from '../api/types'
 
-const objective = ref('创建采购申请并把采购单号回写到办公用品任务')
-const sourceTaskId = ref('OFFICE-TASK-0001')
+const objective = ref('创建采购申请')
 const recordingId = ref('')
 const status = ref<RecordingStatus>('created')
 const busy = ref(false)
@@ -90,13 +86,13 @@ const statusTagType = computed(() =>
   status.value === 'published' ? 'success' : status.value === 'needs_reteach' ? 'danger' : 'primary',
 )
 const operatorTitle = computed(() =>
-  status.value === 'recording' ? '请在弹出的业务系统窗口完成操作' : '从一条真实测试任务开始',
+  status.value === 'recording' ? '请在弹出的采购系统窗口完成操作' : '演示一个最简单的采购操作',
 )
 const operatorMessage = computed(() => {
-  if (status.value === 'recording') return '依次创建采购申请、复制采购单号并回写，然后回到这里结束演示。'
+  if (status.value === 'recording') return '在采购系统填写并提交一条采购申请，然后回到这里结束演示。'
   if (status.value === 'published') return '能力已通过自动测试，可以到任务中心用自然语言调用。'
   if (status.value === 'needs_reteach') return '自动测试没有通过，请查看原因后重新演示一次。'
-  return '中控只记录本次主动开始和结束之间的操作。'
+  return '在采购系统填写并提交一条采购申请。中控只记录本次主动开始和结束之间的操作。'
 })
 
 function stepState(step: string) {
@@ -113,8 +109,8 @@ function stepState(step: string) {
 }
 
 async function handleStart() {
-  if (!objective.value.trim() || !sourceTaskId.value.trim()) {
-    ElMessage.warning('请填写演示目标和测试任务')
+  if (!objective.value.trim()) {
+    ElMessage.warning('请填写演示目标')
     return
   }
   busy.value = true
@@ -122,8 +118,8 @@ async function handleStart() {
   try {
     const created = await createRecording({
       objective: objective.value,
-      source_system: 'onboarding_system',
-      source_task_id: sourceTaskId.value,
+      source_system: 'connected_system',
+      source_task_id: 'purchase-demonstration',
     })
     recordingId.value = created.recording_id
     const started = await startRecording(recordingId.value)

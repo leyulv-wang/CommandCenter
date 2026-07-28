@@ -15,5 +15,8 @@ describe('DemonstrationWorkbenchPage', () => {
     expect(wrapper.text()).toContain('发布')
     expect(wrapper.text()).toContain('开始演示')
     expect(wrapper.text()).toContain('结束演示')
+    expect(wrapper.text()).toContain('在采购系统填写并提交一条采购申请')
+    expect(wrapper.text()).not.toContain('回写')
+    expect(wrapper.find('input[placeholder="OFFICE-TASK-0001"]').exists()).toBe(false)
   })
 })

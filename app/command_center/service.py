@@ -44,7 +44,7 @@ class CommandCenterService:
                 "system_code": recording["source_system"],
                 "object_id": recording["source_task_id"],
             },
-            "http://127.0.0.1:8102",
+            "http://127.0.0.1:8101",
         )
         recording["status"] = "recording"
         self.repository.save_recording(identifier, recording)
