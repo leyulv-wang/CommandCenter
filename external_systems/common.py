@@ -28,6 +28,12 @@ class PurchaseLinkRequest(BaseModel):
     purchase_request_id: str
 
 
+class PurchaseRequest(BaseModel):
+    item_name: str
+    quantity: int
+    reason: str
+
+
 def create_external_app(
     *,
     system_name: str,
@@ -157,6 +163,63 @@ def create_external_app(
             return response
 
     if interface_type == "workflow":
+        @app.post("/api/purchase-requests")
+        def create_purchase_request(
+            request: PurchaseRequest,
+            idempotency_key: str = Header(alias="Idempotency-Key"),
+        ) -> dict[str, object]:
+            with _connect(database_path) as connection:
+                existing_response = _load_idempotent_response(
+                    connection,
+                    "create_purchase_request",
+                    idempotency_key,
+                )
+                if existing_response is not None:
+                    return existing_response
+                created_at = datetime.now().isoformat(timespec="seconds")
+                values = {
+                    "item_name": request.item_name,
+                    "quantity": request.quantity,
+                    "reason": request.reason,
+                }
+                cursor = connection.execute(
+                    """
+                    insert into submissions(
+                        operator_id, form_values, source, endpoint_type,
+                        fd_template_id, created_at
+                    )
+                    values (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "u001",
+                        json.dumps(values, ensure_ascii=False),
+                        "submitted",
+                        "workflow",
+                        workflow_template_id,
+                        created_at,
+                    ),
+                )
+                ticket_id = f"WORKFLOW-{cursor.lastrowid:04d}"
+                connection.execute(
+                    "update submissions set ticket_id = ? where id = ?",
+                    (ticket_id, cursor.lastrowid),
+                )
+                response = {
+                    "success": True,
+                    "data": {
+                        "id": ticket_id,
+                        **values,
+                    },
+                }
+                _store_idempotent_response(
+                    connection,
+                    "create_purchase_request",
+                    idempotency_key,
+                    response,
+                )
+                connection.commit()
+                return response
+
         @app.post("/api/workflows/start")
         def start_workflow(
             docSubject: str = Form(...),

@@ -119,11 +119,19 @@ class HarmlessTestService:
         case: dict[str, Any],
     ) -> dict[str, Any]:
         task = self.fixture_service.prepare(case.get("fixture", {}))
+        literals = case.get("invocation", {})
         runs = [
-            self.runner.run(skill, task, run_id=uuid4()),
+            self.runner.run(skill, task, run_id=uuid4(), literals=literals),
         ]
         if case["category"] == "idempotency":
-            runs.append(self.runner.run(skill, task, run_id=uuid4()))
+            runs.append(
+                self.runner.run(
+                    skill,
+                    task,
+                    run_id=uuid4(),
+                    literals=literals,
+                )
+            )
         step_results = [
             step
             for run in runs

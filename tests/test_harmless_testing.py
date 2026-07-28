@@ -27,9 +27,11 @@ class IsolatedFixture:
 class CountingRunner:
     def __init__(self):
         self.calls = 0
+        self.literals = []
 
     def run(self, skill, task, *, run_id, literals=None):
         self.calls += 1
+        self.literals.append(literals)
         return SkillRunResult("succeeded", [], {"purchase_id": "WORKFLOW-1"})
 
 
@@ -83,6 +85,24 @@ def test_inconclusive_verification_blocks_publication_result():
 
     assert result["status"] == "inconclusive"
     assert result["unknown_side_effect"] is True
+
+
+def test_harmless_test_passes_generated_invocation_values_to_skill():
+    runner = CountingRunner()
+    HarmlessTestService(
+        fixture_service=IsolatedFixture(),
+        runner=runner,
+        verifier=PassingVerifier(),
+    ).run(
+        two_step_skill(),
+        {
+            "category": "normal",
+            "fixture": {},
+            "invocation": {"item_name": "打印纸", "quantity": 10},
+        },
+    )
+
+    assert runner.literals == [{"item_name": "打印纸", "quantity": 10}]
 
 
 def test_local_fixture_resets_only_procurement_and_returns_purchase_inputs():

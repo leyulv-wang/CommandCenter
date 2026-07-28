@@ -352,6 +352,30 @@ def test_workflow_submission_reuses_response_for_same_idempotency_key(tmp_path: 
     assert len(client.get("/api/submissions").json()["items"]) == 1
 
 
+def test_purchase_request_json_api_is_idempotent_and_agent_friendly(tmp_path: Path):
+    app = create_external_app(
+        system_name="采购业务系统",
+        system_code="connected_system",
+        interface_type="workflow",
+        workflow_template_id="purchase_request_001",
+        database_path=tmp_path / "connected.sqlite3",
+        seed_records=[],
+        seed_tasks=[],
+    )
+    client = TestClient(app)
+    payload = {"item_name": "签字笔", "quantity": 10, "reason": "库存不足"}
+    headers = {"Idempotency-Key": "skill:office-task:create"}
+
+    first = client.post("/api/purchase-requests", json=payload, headers=headers)
+    second = client.post("/api/purchase-requests", json=payload, headers=headers)
+
+    assert first.status_code == 200
+    assert second.json() == first.json()
+    assert first.json()["data"]["id"] == "WORKFLOW-0001"
+    assert first.json()["data"]["item_name"] == "签字笔"
+    assert len(client.get("/api/submissions").json()["items"]) == 1
+
+
 def test_office_task_links_purchase_request_idempotently(tmp_path: Path):
     app = create_external_app(
         system_name="办公用品系统",

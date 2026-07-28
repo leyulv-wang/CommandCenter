@@ -54,7 +54,8 @@ class AgentSuite:
             TestPlan,
             (
                 "你是测试设计智能体。为候选 Skill 生成 normal、parameter_variation、"
-                "idempotency 三类测试，每类恰好一个，数据仅用于本地测试系统。"
+                "idempotency 三类测试，每类恰好一个，数据仅用于本地采购测试系统。"
+                "每个 case 的 invocation 必须为 Skill 的全部 literal 输入提供可执行值。"
             ),
             {"skill": skill},
         )

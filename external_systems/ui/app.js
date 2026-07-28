@@ -80,20 +80,17 @@ function idempotencyKey(action, objectId = crypto.randomUUID()) {
 async function createPurchase(event) {
   event.preventDefault()
   const itemName = byId('purchase-item-name').value
-  const form = new FormData()
-  form.set('docSubject', `采购申请：${itemName}`)
-  form.set('fdTemplateId', profile.workflow_template_id)
-  form.set('formValues', JSON.stringify({
-    fd_item_name: itemName,
-    fd_quantity: Number(byId('purchase-quantity').value),
-    fd_reason: byId('purchase-reason').value,
-  }))
-  form.set('docCreator', 'u001')
-  form.set('docStatus', '20')
-  const response = await request('/api/workflows/start', {
+  const response = await request('/api/purchase-requests', {
     method: 'POST',
-    headers: { 'Idempotency-Key': idempotencyKey('create-purchase') },
-    body: form,
+    headers: {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': idempotencyKey('create-purchase'),
+    },
+    body: JSON.stringify({
+      item_name: itemName,
+      quantity: Number(byId('purchase-quantity').value),
+      reason: byId('purchase-reason').value,
+    }),
   })
   byId('purchase-result').textContent = `采购单号：${response.data.id}`
   await refreshData()

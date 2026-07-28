@@ -251,7 +251,6 @@ def _reset_demo_system(system_code: str) -> dict[str, object]:
 def _build_command_center_service() -> CommandCenterService:
     base_urls = {
         "connected_system": "http://127.0.0.1:8101",
-        "onboarding_system": "http://127.0.0.1:8102",
     }
     client = httpx.Client(timeout=30)
     documents = {
@@ -259,14 +258,7 @@ def _build_command_center_service() -> CommandCenterService:
         for system_code, base_url in base_urls.items()
     }
     allowlist = {
-        ("connected_system", "start_workflow_api_workflows_start_post"),
-        ("connected_system", "list_submissions_api_submissions_get"),
-        ("onboarding_system", "list_tasks_api_tasks_get"),
-        ("onboarding_system", "get_task_api_tasks__task_id__get"),
-        (
-            "onboarding_system",
-            "link_purchase_request_api_tasks__task_id__purchase_link_post",
-        ),
+        ("connected_system", "create_purchase_request_api_purchase_requests_post"),
     }
     catalog = ToolCatalog.from_openapi_documents(
         documents,

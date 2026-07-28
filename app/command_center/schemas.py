@@ -103,7 +103,9 @@ class SkillStep(BaseModel):
     @field_validator("input_bindings")
     @classmethod
     def validate_bindings(cls, value: dict[str, str]) -> dict[str, str]:
-        for expression in value.values():
+        for target, expression in value.items():
+            if not target.startswith(("body.", "path.")):
+                raise ValueError("tool binding target must start with body. or path.")
             if not expression.startswith(("task.", "steps.", "literal.")):
                 raise ValueError("binding must reference task, steps, or literal")
         return value

@@ -29,7 +29,7 @@ def valid_skill_payload() -> dict[str, object]:
                 "step_id": "create_purchase",
                 "name": "创建采购申请",
                 "tool_id": "connected_system:start_workflow",
-                "input_bindings": {"item_name": "task.content.item_name"},
+                "input_bindings": {"body.item_name": "task.content.item_name"},
                 "output_bindings": {"purchase_request_id": "data.id"},
                 "side_effect": "write",
                 "idempotency_key_template": "{skill_id}:{source_object_id}:{step_id}",
@@ -50,6 +50,16 @@ def test_skill_rejects_arbitrary_binding_code():
 def test_write_step_requires_idempotency_template():
     payload = valid_skill_payload()
     payload["steps"][0]["idempotency_key_template"] = None
+
+    with pytest.raises(ValidationError):
+        SkillDefinition.model_validate(payload)
+
+
+def test_tool_binding_target_must_identify_path_or_body():
+    payload = valid_skill_payload()
+    payload["steps"][0]["input_bindings"] = {
+        "item_name": "task.content.item_name"
+    }
 
     with pytest.raises(ValidationError):
         SkillDefinition.model_validate(payload)
