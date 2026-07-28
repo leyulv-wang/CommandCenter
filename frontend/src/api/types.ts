@@ -102,3 +102,33 @@ export interface ExternalSystemDataResponse {
   tasks: TaskItem[]
   submissions: ExternalSubmission[]
 }
+
+export type RecordingStatus =
+  | 'created'
+  | 'recording'
+  | 'analyzing'
+  | 'testing'
+  | 'published'
+  | 'needs_reteach'
+
+export interface RecordingView {
+  recording_id: string
+  status: RecordingStatus
+  objective: string
+  source_system: string
+  source_task_id: string
+  learning_result?: Record<string, unknown>
+}
+
+export interface TaskRunView {
+  run_id: string
+  user_request: string
+  status: 'matching' | 'needs_object_selection' | 'executing' | 'verifying' | 'succeeded' | 'failed'
+  candidate_objects?: TaskItem[]
+  final_response?: {
+    summary: string
+    outputs?: Record<string, unknown>
+    observed_state?: Record<string, unknown>
+  }
+  errors?: string[]
+}

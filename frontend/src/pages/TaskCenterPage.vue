@@ -8,6 +8,8 @@
       <el-tag>演示用户：{{ operatorId }}</el-tag>
     </div>
 
+    <NaturalLanguageTaskPanel />
+
     <el-skeleton v-if="systemsLoading" :rows="5" animated />
     <el-empty
       v-else-if="connectedSystems.length === 0"
@@ -170,6 +172,7 @@ import type {
   TaskItem,
 } from '../api/types'
 import DynamicForm from '../components/DynamicForm.vue'
+import NaturalLanguageTaskPanel from '../components/NaturalLanguageTaskPanel.vue'
 
 const operatorId = 'u001'
 const activeTab = ref('application')
