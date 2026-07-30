@@ -5,10 +5,10 @@
         <p class="eyebrow">Task Center</p>
         <h2>任务中心</h2>
       </div>
-      <el-tag>演示用户：{{ operatorId }}</el-tag>
+      <el-tag>{{ currentUser.name }}：{{ operatorId }} · {{ currentUser.role }}</el-tag>
     </div>
 
-    <NaturalLanguageTaskPanel />
+    <NaturalLanguageTaskPanel v-if="currentUser.id === 'u001'" />
 
     <el-skeleton v-if="systemsLoading" :rows="5" animated />
     <el-empty
@@ -173,8 +173,10 @@ import type {
 } from '../api/types'
 import DynamicForm from '../components/DynamicForm.vue'
 import NaturalLanguageTaskPanel from '../components/NaturalLanguageTaskPanel.vue'
+import { resolveTestUser } from '../userContext'
 
-const operatorId = 'u001'
+const currentUser = resolveTestUser()
+const operatorId = currentUser.id
 const activeTab = ref('application')
 
 const connectedSystems = ref<ExternalSystem[]>([])
