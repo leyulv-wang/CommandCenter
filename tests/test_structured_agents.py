@@ -96,6 +96,16 @@ class PromptCapturingModel:
             )
         if schema.__name__ == "SkillDefinition":
             return schema.model_validate(valid_skill_payload())
+        if schema.__name__ == "VerificationResult":
+            return schema.model_validate(
+                {
+                    "status": "passed",
+                    "conditions": [],
+                    "side_effects": {},
+                    "duplicate_detected": False,
+                    "summary": "状态变化与执行结果一致",
+                }
+            )
         raise AssertionError(schema)
 
 
@@ -140,6 +150,30 @@ def test_analysis_and_compilation_agents_share_generic_binding_protocol():
     assert "不能因此判定字段来源不确定" in analysis_prompt
 
 
+def test_compilation_agent_requires_reusable_success_conditions():
+    model = PromptCapturingModel()
+    agents = AgentSuite(model)
+    analysis = agents.analyze_demonstration(
+        {"trace_id": str(uuid4())},
+        {"tools": []},
+    )
+
+    agents.compile_skill(
+        analysis,
+        {
+            "api_exchanges": [
+                {"response_body": {"data": {"id": "DEMO-OBJECT-0001"}}}
+            ]
+        },
+        {"tools": []},
+    )
+
+    compilation_prompt = model.prompts[-1]
+    assert "成功条件必须描述可复用的业务不变量" in compilation_prompt
+    assert "不得把演示返回的业务对象 ID" in compilation_prompt
+    assert "新执行产生的对象标识允许变化" in compilation_prompt
+
+
 def test_structured_model_serializes_tool_catalog_for_agent_prompt():
     captured = {}
 
@@ -178,3 +212,24 @@ def test_structured_model_serializes_tool_catalog_for_agent_prompt():
     assert captured["payload"]["catalog"]["tools"][0]["tool_id"] == (
         "connected_system:start_workflow"
     )
+
+
+def test_verifier_treats_declared_write_as_known_effect_not_unknown_effect():
+    model = PromptCapturingModel()
+    agents = AgentSuite(model)
+
+    agents.verify_result(
+        valid_skill_payload(),
+        [],
+        {
+            "_execution_evidence": {
+                "before_state": {"objects": []},
+                "after_state": {"objects": [{"id": "OBJECT-1"}]},
+            }
+        },
+    )
+
+    prompt = model.prompts[-1]
+    assert "occurred=true 表示已知写操作" in prompt
+    assert "不能仅因发生写操作而判定为未知副作用" in prompt
+    assert "执行前后状态" in prompt

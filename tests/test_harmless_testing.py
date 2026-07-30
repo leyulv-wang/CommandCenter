@@ -105,6 +105,53 @@ def test_harmless_test_passes_generated_invocation_values_to_skill():
     assert runner.literals == [{"item_name": "打印纸", "quantity": 10}]
 
 
+class ChangingFixture(IsolatedFixture):
+    def __init__(self):
+        super().__init__()
+        self.observations = iter(
+            [
+                {"objects": [], "object_count": 0},
+                {"objects": [{"id": "OBJECT-1"}], "object_count": 1},
+            ]
+        )
+
+    def observe(self, task):
+        return next(self.observations)
+
+
+class EvidenceCapturingVerifier(PassingVerifier):
+    def __init__(self):
+        self.observed_state = None
+
+    def verify_result(self, skill, step_results, observed_state):
+        self.observed_state = observed_state
+        return VerificationResult(
+            status="passed",
+            side_effects={},
+            duplicate_detected=False,
+            summary="状态变化可解释",
+        )
+
+
+def test_harmless_test_gives_verifier_before_and_after_state_evidence():
+    verifier = EvidenceCapturingVerifier()
+    service = HarmlessTestService(
+        fixture_service=ChangingFixture(),
+        runner=CountingRunner(),
+        verifier=verifier,
+    )
+
+    service.run(two_step_skill(), {"category": "normal", "fixture": {}})
+
+    assert verifier.observed_state["_execution_evidence"] == {
+        "before_state": {"objects": [], "object_count": 0},
+        "after_state": {
+            "objects": [{"id": "OBJECT-1"}],
+            "object_count": 1,
+        },
+    }
+
+
 def test_local_fixture_resets_only_procurement_and_returns_purchase_inputs():
     calls: list[tuple[str, str]] = []
 

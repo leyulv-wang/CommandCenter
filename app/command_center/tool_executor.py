@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from typing import Any
 
@@ -51,6 +52,29 @@ class ToolExecutor:
             )
             response.raise_for_status()
             payload = response.json()
+            side_effect: dict[str, Any] = {
+                "occurred": tool.method != "GET",
+            }
+            if tool.method != "GET":
+                side_effect.update(
+                    {
+                        "operation": {
+                            "tool_id": tool.tool_id,
+                            "method": tool.method,
+                            "path": path,
+                        },
+                        "idempotency": {
+                            "protected": bool(command.idempotency_key),
+                            "key_fingerprint": (
+                                hashlib.sha256(
+                                    command.idempotency_key.encode("utf-8")
+                                ).hexdigest()
+                                if command.idempotency_key
+                                else None
+                            ),
+                        },
+                    }
+                )
             return StepResult(
                 run_id=command.run_id,
                 step_id=command.step_id,
@@ -61,7 +85,7 @@ class ToolExecutor:
                 request_summary={"method": tool.method, "path": path},
                 response_summary={"status_code": response.status_code},
                 normalized_output=payload,
-                side_effect={"occurred": tool.method != "GET"},
+                side_effect=side_effect,
                 retry_safe=bool(command.idempotency_key) or tool.method == "GET",
             )
         except (httpx.HTTPError, ValueError) as exc:

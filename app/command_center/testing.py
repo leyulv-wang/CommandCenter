@@ -119,6 +119,7 @@ class HarmlessTestService:
         case: dict[str, Any],
     ) -> dict[str, Any]:
         task = self.fixture_service.prepare(case.get("fixture", {}))
+        before_state = self.fixture_service.observe(task)
         literals = case.get("invocation", {})
         runs = [
             self.runner.run(skill, task, run_id=uuid4(), literals=literals),
@@ -138,10 +139,17 @@ class HarmlessTestService:
             for step in run.step_results
         ]
         observed_state = self.fixture_service.observe(task)
+        verification_state = {
+            **observed_state,
+            "_execution_evidence": {
+                "before_state": before_state,
+                "after_state": observed_state,
+            },
+        }
         verification = self.verifier.verify_result(
             skill,
             step_results,
-            observed_state,
+            verification_state,
         )
         run_failed = any(run.status == "failed" for run in runs)
         status = "failed" if run_failed else verification.status

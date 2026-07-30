@@ -61,6 +61,10 @@ class AgentSuite:
                 "只使用目录内 Tool；写步骤必须提供幂等模板；引用只能来自 task、steps、literal。"
                 "每个 input_bindings 的目标键必须写成 body.<字段> 或 path.<路径参数>；"
                 "跨步骤结果使用 steps.<步骤>.output.<响应路径>。"
+                "成功条件必须描述可复用的业务不变量，例如请求成功、创建的对象能在"
+                "最终状态中观察到且没有重复。不得把演示返回的业务对象 ID 或其他"
+                "单次运行值写成固定期望值；新执行产生的对象标识允许变化，应依据"
+                "本次步骤输出与最终状态之间的对应关系验证。"
                 f"{BINDING_PROTOCOL_PROMPT}"
             ),
             {"analysis": analysis, "trace": trace, "catalog": catalog},
@@ -89,6 +93,11 @@ class AgentSuite:
                 "你是验证智能体。V1 只验证采购系统：根据 Skill 成功条件、步骤输出和"
                 "采购系统最终记录，确认本次采购申请是否存在且没有重复。"
                 "HTTP 2xx 不能单独证明业务成功；未知副作用必须返回 inconclusive。"
+                "StepResult.side_effect 中 occurred=true 表示已知写操作，"
+                "不能仅因发生写操作而判定为未知副作用。应结合操作描述、幂等信息、"
+                "步骤输出以及 _execution_evidence 中的执行前后状态，判断状态变化"
+                "是否能由 Skill 解释；只有出现无法解释的变化或证据不足时才返回 "
+                "inconclusive。"
             ),
             {
                 "skill": skill,

@@ -78,3 +78,67 @@ def test_executor_sends_idempotency_header_and_returns_normalized_output():
     assert result.normalized_output["result_values"]["purchase_request_id"] == "W-1"
     assert observed["headers"]["idempotency-key"] == "skill:task:link"
     assert observed["url"] == "http://test/api/tasks/OFFICE-TASK-0001/purchase-link"
+
+
+def test_executor_describes_known_write_without_exposing_idempotency_key():
+    catalog = ToolCatalog.from_openapi_documents(
+        {
+            "business_system": {
+                "paths": {
+                    "/api/objects": {
+                        "post": {
+                            "operationId": "create_object",
+                            "requestBody": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"type": "object"}
+                                    }
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        },
+        {"business_system": "http://test"},
+        {("business_system", "create_object")},
+    )
+    command = ExecutionCommand(
+        run_id=uuid4(),
+        skill_id=uuid4(),
+        skill_version=1,
+        step_id="create",
+        tool_id="business_system:create_object",
+        arguments={"body": {"name": "test"}},
+        idempotency_key="secret-idempotency-key",
+        reason="创建业务对象",
+    )
+    executor = ToolExecutor(
+        catalog,
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={"success": True, "data": {"id": "OBJECT-1"}},
+                )
+            )
+        ),
+    )
+
+    result = executor.execute(command)
+
+    assert result.side_effect == {
+        "occurred": True,
+        "operation": {
+            "tool_id": "business_system:create_object",
+            "method": "POST",
+            "path": "/api/objects",
+        },
+        "idempotency": {
+            "protected": True,
+            "key_fingerprint": (
+                "9ab3afd1220a87823137dd9a1803c652c5361facc5f279c6254889a295720341"
+            ),
+        },
+    }
+    assert "secret-idempotency-key" not in str(result.side_effect)
