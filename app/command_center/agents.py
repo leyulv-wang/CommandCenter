@@ -12,6 +12,13 @@ from app.command_center.schemas import (
 )
 
 
+BINDING_PROTOCOL_PROMPT = (
+    "绑定表达式只能引用数据路径：业务上下文使用 task.content.quantity，"
+    "前序步骤输出使用 steps.create.output.data.id，运行时输入使用 "
+    "literal.item_name。不能写成 literal(...)、函数调用、代码或直接业务值。"
+)
+
+
 class AgentSuite:
     def __init__(self, model: StructuredModel):
         self.model = model
@@ -26,6 +33,7 @@ class AgentSuite:
             (
                 "你是演示理解智能体。识别员工真正完成的业务动作，把页面证据与"
                 "允许的 API Tool 对齐。关键请求未匹配或字段来源不确定时 compilable=false。"
+                f"{BINDING_PROTOCOL_PROMPT}"
             ),
             {"trace": trace, "catalog": catalog},
         )
@@ -45,6 +53,7 @@ class AgentSuite:
                 "只使用目录内 Tool；写步骤必须提供幂等模板；引用只能来自 task、steps、literal。"
                 "每个 input_bindings 的目标键必须写成 body.<字段> 或 path.<路径参数>；"
                 "跨步骤结果使用 steps.<步骤>.output.<响应路径>。"
+                f"{BINDING_PROTOCOL_PROMPT}"
             ),
             {"analysis": analysis, "trace": trace, "catalog": catalog},
         )

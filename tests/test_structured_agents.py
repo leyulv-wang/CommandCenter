@@ -78,6 +78,27 @@ class SchemaAwareModel:
         raise AssertionError(schema)
 
 
+class PromptCapturingModel:
+    def __init__(self):
+        self.prompts = []
+
+    def generate(self, schema, system_prompt, payload):
+        self.prompts.append(system_prompt)
+        if schema.__name__ == "DemonstrationAnalysis":
+            return schema.model_validate(
+                {
+                    "summary": "识别到一个允许的业务动作",
+                    "business_actions": [],
+                    "ignored_ui_event_ids": [],
+                    "uncertainties": [],
+                    "compilable": True,
+                }
+            )
+        if schema.__name__ == "SkillDefinition":
+            return schema.model_validate(valid_skill_payload())
+        raise AssertionError(schema)
+
+
 def test_agent_suite_produces_three_required_test_categories():
     agents = AgentSuite(SchemaAwareModel())
     analysis = agents.analyze_demonstration({"trace_id": str(uuid4())}, {"tools": []})
@@ -91,6 +112,28 @@ def test_agent_suite_produces_three_required_test_categories():
         "parameter_variation",
         "idempotency",
     }
+
+
+def test_analysis_and_compilation_agents_share_generic_binding_protocol():
+    model = PromptCapturingModel()
+    agents = AgentSuite(model)
+    analysis = agents.analyze_demonstration(
+        {"trace_id": str(uuid4())},
+        {"tools": []},
+    )
+
+    agents.compile_skill(
+        analysis,
+        {"trace_id": str(uuid4())},
+        {"tools": []},
+    )
+
+    assert len(model.prompts) == 2
+    for prompt in model.prompts:
+        assert "task.content.quantity" in prompt
+        assert "steps.create.output.data.id" in prompt
+        assert "literal.item_name" in prompt
+        assert "不能写成 literal(...)" in prompt
 
 
 def test_structured_model_serializes_tool_catalog_for_agent_prompt():
