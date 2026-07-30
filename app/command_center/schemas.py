@@ -1,10 +1,22 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
+
+
+BindingExpression = Annotated[
+    str,
+    StringConstraints(pattern=r"^(task|steps|literal)\..+$"),
+]
 
 
 class UIEvent(BaseModel):
@@ -47,15 +59,7 @@ class OperationTrace(BaseModel):
 
 class InputBinding(BaseModel):
     tool_field: str
-    expression: str
-
-    @field_validator("expression")
-    @classmethod
-    def validate_expression(cls, value: str) -> str:
-        allowed = ("task.", "steps.", "literal.")
-        if not value.startswith(allowed):
-            raise ValueError("binding must reference task, steps, or literal")
-        return value
+    expression: BindingExpression
 
 
 class BusinessAction(BaseModel):
@@ -95,19 +99,20 @@ class SkillStep(BaseModel):
     step_id: str
     name: str
     tool_id: str
-    input_bindings: dict[str, str]
+    input_bindings: dict[str, BindingExpression]
     output_bindings: dict[str, str] = Field(default_factory=dict)
     side_effect: Literal["read", "write"]
     idempotency_key_template: str | None = None
 
     @field_validator("input_bindings")
     @classmethod
-    def validate_bindings(cls, value: dict[str, str]) -> dict[str, str]:
-        for target, expression in value.items():
+    def validate_bindings(
+        cls,
+        value: dict[str, BindingExpression],
+    ) -> dict[str, BindingExpression]:
+        for target in value:
             if not target.startswith(("body.", "path.")):
                 raise ValueError("tool binding target must start with body. or path.")
-            if not expression.startswith(("task.", "steps.", "literal.")):
-                raise ValueError("binding must reference task, steps, or literal")
         return value
 
     @model_validator(mode="after")
