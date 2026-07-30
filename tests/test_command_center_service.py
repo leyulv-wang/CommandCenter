@@ -31,6 +31,11 @@ class Graph:
         return self.result
 
 
+class FailingGraph:
+    def invoke(self, state):
+        raise RuntimeError("secret provider detail")
+
+
 def test_service_connects_recording_stop_to_learning_graph(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
     recorder = Recorder()
@@ -58,6 +63,71 @@ def test_service_connects_recording_stop_to_learning_graph(tmp_path):
     assert stopped["status"] == "published"
     assert learning.state["trace"]["objective"] == "演示采购回写"
     assert repository.get_recording(created["recording_id"])["status"] == "published"
+
+
+def test_service_persists_learning_rejection_feedback(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph(
+            {
+                "final_status": "rejected",
+                "failure_stage": "analysis",
+                "failure_reasons": ["未观察到创建采购申请接口"],
+            }
+        ),
+        execution_graph=Graph({"status": "succeeded"}),
+    )
+    created = service.create_recording(
+        CreateRecordingRequest(
+            objective="创建采购申请",
+            source_system="connected_system",
+            source_task_id="purchase-demonstration",
+        )
+    )
+
+    import asyncio
+
+    asyncio.run(service.start_recording(created["recording_id"]))
+    stopped = asyncio.run(service.stop_recording(created["recording_id"]))
+
+    assert stopped["status"] == "needs_reteach"
+    assert stopped["failure_stage"] == "analysis"
+    assert stopped["failure_reasons"] == ["未观察到创建采购申请接口"]
+    persisted = repository.get_recording(created["recording_id"])
+    assert persisted["failure_stage"] == "analysis"
+    assert persisted["failure_reasons"] == ["未观察到创建采购申请接口"]
+
+
+def test_service_sanitizes_learning_system_failure(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=FailingGraph(),
+        execution_graph=Graph({"status": "succeeded"}),
+    )
+    created = service.create_recording(
+        CreateRecordingRequest(
+            objective="创建采购申请",
+            source_system="connected_system",
+            source_task_id="purchase-demonstration",
+        )
+    )
+
+    import asyncio
+
+    asyncio.run(service.start_recording(created["recording_id"]))
+    stopped = asyncio.run(service.stop_recording(created["recording_id"]))
+
+    assert stopped["status"] == "needs_reteach"
+    assert stopped["failure_stage"] == "system"
+    assert stopped["failure_reasons"] == [
+        "系统处理演示时发生错误，请检查模型配置和服务日志后重试。"
+    ]
+    assert "secret provider detail" not in str(stopped)
+    assert repository.get_recording(created["recording_id"]) == stopped
 
 
 def test_service_persists_natural_language_task_run(tmp_path):

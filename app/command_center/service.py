@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi.encoders import jsonable_encoder
 
 from app.command_center.repository import CommandCenterRepository
+
+
+logger = logging.getLogger(__name__)
 
 
 class CommandCenterService:
@@ -57,18 +61,40 @@ class CommandCenterService:
         recording["status"] = "analyzing"
         recording["trace"] = trace.model_dump(mode="json")
         self.repository.save_recording(identifier, recording)
-        result = self.learning_graph.invoke(
-            {
+        try:
+            result = self.learning_graph.invoke(
+                {
+                    "recording_id": str(identifier),
+                    "trace": recording["trace"],
+                }
+            )
+        except Exception:
+            logger.exception(
+                "Learning graph failed for recording %s",
+                identifier,
+            )
+            result = {
                 "recording_id": str(identifier),
-                "trace": recording["trace"],
+                "final_status": "rejected",
+                "failure_stage": "system",
+                "failure_reasons": [
+                    "系统处理演示时发生错误，请检查模型配置和服务日志后重试。"
+                ],
             }
-        )
         recording["status"] = (
             "published"
             if result.get("final_status") == "published"
             else "needs_reteach"
         )
         recording["learning_result"] = jsonable_encoder(result)
+        if recording["status"] == "needs_reteach":
+            if result.get("failure_stage"):
+                recording["failure_stage"] = result["failure_stage"]
+            if result.get("failure_reasons"):
+                recording["failure_reasons"] = result["failure_reasons"]
+        else:
+            recording.pop("failure_stage", None)
+            recording.pop("failure_reasons", None)
         self.repository.save_recording(identifier, recording)
         return recording
 
