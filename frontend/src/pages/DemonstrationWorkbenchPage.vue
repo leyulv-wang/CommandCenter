@@ -49,6 +49,9 @@
         <p class="operator-label">操作提示</p>
         <h3>{{ operatorTitle }}</h3>
         <p>{{ operatorMessage }}</p>
+        <ul v-if="failureReasons.length" class="failure-reasons">
+          <li v-for="reason in failureReasons" :key="reason">{{ reason }}</li>
+        </ul>
         <div v-if="errorMessage" class="error-note">{{ errorMessage }}</div>
       </section>
     </div>
@@ -59,13 +62,15 @@
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { createRecording, startRecording, stopRecording } from '../api/commandCenter'
-import type { RecordingStatus } from '../api/types'
+import type { RecordingFailureStage, RecordingStatus } from '../api/types'
 
 const objective = ref('创建采购申请')
 const recordingId = ref('')
 const status = ref<RecordingStatus>('created')
 const busy = ref(false)
 const errorMessage = ref('')
+const failureStage = ref<RecordingFailureStage>()
+const failureReasons = ref<string[]>([])
 
 const processSteps = [
   { key: 'observe', mark: '01', label: '观察', help: '记录页面动作和真实 API' },
@@ -85,25 +90,37 @@ const statusLabel = computed(() => ({
 const statusTagType = computed(() =>
   status.value === 'published' ? 'success' : status.value === 'needs_reteach' ? 'danger' : 'primary',
 )
-const operatorTitle = computed(() =>
-  status.value === 'recording' ? '请在弹出的采购系统窗口完成操作' : '演示一个最简单的采购操作',
-)
+const operatorTitle = computed(() => {
+  if (status.value === 'recording') return '请在弹出的采购系统窗口完成操作'
+  if (status.value === 'published') return 'Skill 已通过测试并发布'
+  if (status.value !== 'needs_reteach') return '演示一个最简单的采购操作'
+  if (failureStage.value === 'analysis') return '演示内容无法生成 Skill'
+  if (failureStage.value === 'testing') return '自动测试没有通过'
+  if (failureStage.value === 'system') return '系统处理失败'
+  return '本次演示未能发布 Skill'
+})
 const operatorMessage = computed(() => {
   if (status.value === 'recording') return '在采购系统填写并提交一条采购申请，然后回到这里结束演示。'
   if (status.value === 'published') return '能力已通过自动测试，可以到任务中心用自然语言调用。'
-  if (status.value === 'needs_reteach') return '自动测试没有通过，请查看原因后重新演示一次。'
+  if (status.value === 'needs_reteach') {
+    if (failureStage.value === 'analysis') return '智能体无法将本次演示编译为可复用能力，请根据原因重新演示。'
+    if (failureStage.value === 'testing') return '候选 Skill 已生成，但无害测试没有全部通过。'
+    if (failureStage.value === 'system') return '系统未能完成本次演示处理，请根据提示检查服务。'
+    return '本次演示未能发布 Skill，请重新演示一次。'
+  }
   return '在采购系统填写并提交一条采购申请。中控只记录本次主动开始和结束之间的操作。'
 })
 
 function stepState(step: string) {
   const order = { observe: 0, learn: 1, test: 2, publish: 3 }
+  const reteachStep = failureStage.value === 'testing' ? 2 : 1
   const current = {
     created: -1,
     recording: 0,
     analyzing: 1,
     testing: 2,
     published: 3,
-    needs_reteach: 2,
+    needs_reteach: reteachStep,
   }[status.value]
   return { active: order[step as keyof typeof order] === current, done: order[step as keyof typeof order] < current }
 }
@@ -115,6 +132,8 @@ async function handleStart() {
   }
   busy.value = true
   errorMessage.value = ''
+  failureStage.value = undefined
+  failureReasons.value = []
   try {
     const created = await createRecording({
       objective: objective.value,
@@ -139,9 +158,13 @@ async function handleStop() {
   try {
     const result = await stopRecording(recordingId.value)
     status.value = result.status
+    failureStage.value = result.failure_stage
+    failureReasons.value = result.failure_reasons ?? []
     if (result.status === 'published') ElMessage.success('Skill 已通过测试并发布')
   } catch (error) {
     status.value = 'needs_reteach'
+    failureStage.value = 'system'
+    failureReasons.value = []
     errorMessage.value = error instanceof Error ? error.message : '演示分析失败'
   } finally {
     busy.value = false
@@ -167,6 +190,7 @@ async function handleStop() {
 .operator-note { background: #e8f3f6; border-left: 4px solid var(--process); padding: 28px; }
 .operator-note h3 { color: #14213d; font-size: 21px; margin: 8px 0 12px; }
 .operator-note p { color: #475569; line-height: 1.7; }
+.failure-reasons { color: #9f1239; line-height: 1.7; margin: 14px 0 0; padding-left: 20px; }
 .operator-label { color: var(--process) !important; font: 700 12px Bahnschrift, sans-serif; letter-spacing: .12em; text-transform: uppercase; }
 .error-note { background: #fff1f2; border: 1px solid #fecdd3; color: #be123c; margin-top: 18px; padding: 12px; }
 @media (max-width: 900px) {

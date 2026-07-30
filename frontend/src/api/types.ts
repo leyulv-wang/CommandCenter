@@ -111,12 +111,16 @@ export type RecordingStatus =
   | 'published'
   | 'needs_reteach'
 
+export type RecordingFailureStage = 'analysis' | 'testing' | 'system'
+
 export interface RecordingView {
   recording_id: string
   status: RecordingStatus
   objective: string
   source_system: string
   source_task_id: string
+  failure_stage?: RecordingFailureStage
+  failure_reasons?: string[]
   learning_result?: Record<string, unknown>
 }
 
