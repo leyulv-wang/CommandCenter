@@ -204,11 +204,42 @@ def create_external_app(
                     "update submissions set ticket_id = ? where id = ?",
                     (ticket_id, cursor.lastrowid),
                 )
+                next_task_id = connection.execute(
+                    "select coalesce(max(id), 0) + 1 as next_id from tasks"
+                ).fetchone()["next_id"]
+                approval_task_id = (
+                    f"{system_code.upper()}-TASK-{next_task_id:04d}"
+                )
+                task_content = {
+                    "purchase_request_id": ticket_id,
+                    "item_name": request.item_name,
+                    "quantity": request.quantity,
+                    "reason": request.reason,
+                    "applicant_id": "u001",
+                }
+                connection.execute(
+                    """
+                    insert into tasks(
+                        task_id, title, task_type, form_code, content, status,
+                        assignee_id, created_at
+                    )
+                    values (?, ?, ?, ?, ?, 'pending', 'u002', ?)
+                    """,
+                    (
+                        approval_task_id,
+                        f"审批采购申请：{request.item_name}",
+                        task_type,
+                        task_form_code,
+                        json.dumps(task_content, ensure_ascii=False),
+                        created_at,
+                    ),
+                )
                 response = {
                     "success": True,
                     "data": {
                         "id": ticket_id,
                         **values,
+                        "approval_task_id": approval_task_id,
                     },
                 }
                 _store_idempotent_response(

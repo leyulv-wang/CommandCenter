@@ -352,19 +352,21 @@ def test_workflow_submission_reuses_response_for_same_idempotency_key(tmp_path: 
     assert len(client.get("/api/submissions").json()["items"]) == 1
 
 
-def test_purchase_request_json_api_is_idempotent_and_agent_friendly(tmp_path: Path):
+def test_purchase_request_creates_one_idempotent_u002_approval_task(tmp_path: Path):
     app = create_external_app(
         system_name="采购业务系统",
         system_code="connected_system",
         interface_type="workflow",
         workflow_template_id="purchase_request_001",
+        task_type="purchase_review",
+        task_form_code="purchase_task_result",
         database_path=tmp_path / "connected.sqlite3",
         seed_records=[],
         seed_tasks=[],
     )
     client = TestClient(app)
     payload = {"item_name": "签字笔", "quantity": 10, "reason": "库存不足"}
-    headers = {"Idempotency-Key": "skill:office-task:create"}
+    headers = {"Idempotency-Key": "skill:purchase:create"}
 
     first = client.post("/api/purchase-requests", json=payload, headers=headers)
     second = client.post("/api/purchase-requests", json=payload, headers=headers)
@@ -373,7 +375,24 @@ def test_purchase_request_json_api_is_idempotent_and_agent_friendly(tmp_path: Pa
     assert second.json() == first.json()
     assert first.json()["data"]["id"] == "WORKFLOW-0001"
     assert first.json()["data"]["item_name"] == "签字笔"
+    approval_task_id = first.json()["data"]["approval_task_id"]
     assert len(client.get("/api/submissions").json()["items"]) == 1
+    assert client.get(
+        "/api/tasks",
+        params={"operator_id": "u001", "status": "pending"},
+    ).json()["items"] == []
+    u002_tasks = client.get(
+        "/api/tasks",
+        params={"operator_id": "u002", "status": "pending"},
+    ).json()["items"]
+    assert [task["task_id"] for task in u002_tasks] == [approval_task_id]
+    assert u002_tasks[0]["content"] == {
+        "purchase_request_id": "WORKFLOW-0001",
+        "item_name": "签字笔",
+        "quantity": 10,
+        "reason": "库存不足",
+        "applicant_id": "u001",
+    }
 
 
 def test_office_task_links_purchase_request_idempotently(tmp_path: Path):
