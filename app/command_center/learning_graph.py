@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol, TypedDict
+from typing import Any, Literal, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
@@ -36,6 +36,8 @@ class LearningState(TypedDict, total=False):
     test_results: list[dict[str, Any]]
     final_status: str
     errors: list[str]
+    failure_stage: Literal["analysis", "testing"]
+    failure_reasons: list[str]
 
 
 def build_learning_graph(dependencies: LearningDependencies):
@@ -49,9 +51,33 @@ def build_learning_graph(dependencies: LearningDependencies):
             if isinstance(analysis, dict)
             else analysis.compilable
         )
+        if compilable:
+            return {
+                "analysis": analysis,
+                "final_status": "analyzing",
+            }
+        uncertainties = (
+            analysis.get("uncertainties", [])
+            if isinstance(analysis, dict)
+            else analysis.uncertainties
+        )
+        reasons = [
+            str(item.get("description", "")).strip()
+            for item in uncertainties
+            if isinstance(item, dict) and str(item.get("description", "")).strip()
+        ]
+        summary = (
+            analysis.get("summary", "")
+            if isinstance(analysis, dict)
+            else analysis.summary
+        )
+        if not reasons and str(summary).strip():
+            reasons.append(str(summary).strip())
         return {
             "analysis": analysis,
-            "final_status": "analyzing" if compilable else "rejected",
+            "final_status": "rejected",
+            "failure_stage": "analysis",
+            "failure_reasons": reasons or ["演示内容不足，无法生成可复用 Skill。"],
         }
 
     def compile_skill(state: LearningState) -> LearningState:
@@ -93,9 +119,36 @@ def build_learning_graph(dependencies: LearningDependencies):
             if result["status"] == "passed"
             and not result.get("unknown_side_effect", False)
         }
+        rejected = passed != required
+        failure_reasons: list[str] = []
+        if rejected:
+            for result in results:
+                if (
+                    result["status"] == "passed"
+                    and not result.get("unknown_side_effect", False)
+                ):
+                    continue
+                verification = result.get("verification", {})
+                summary = (
+                    verification.get("summary", "")
+                    if isinstance(verification, dict)
+                    else ""
+                )
+                failure_reasons.append(
+                    str(summary).strip()
+                    or f"{result['category']} 测试未通过。"
+                )
         return {
             "test_results": results,
-            "final_status": "ready_to_publish" if passed == required else "rejected",
+            "final_status": "rejected" if rejected else "ready_to_publish",
+            **(
+                {
+                    "failure_stage": "testing",
+                    "failure_reasons": failure_reasons,
+                }
+                if rejected
+                else {}
+            ),
         }
 
     def publish(state: LearningState) -> LearningState:

@@ -21,6 +21,17 @@ class FakeAgents:
         ]
 
 
+class RejectingAgents(FakeAgents):
+    def analyze_demonstration(self, trace, catalog):
+        return {
+            "compilable": False,
+            "summary": "实际调用了任务派发接口",
+            "uncertainties": [
+                {"description": "未观察到允许的创建采购申请接口"},
+            ],
+        }
+
+
 class FakeTester:
     def __init__(self, failing_category=None):
         self.failing_category = failing_category
@@ -30,6 +41,13 @@ class FakeTester:
         return {
             "category": case["category"],
             "status": status,
+            "verification": {
+                "summary": (
+                    "参数变化测试未通过"
+                    if status == "failed"
+                    else "测试通过"
+                )
+            },
             "unknown_side_effect": False,
         }
 
@@ -70,4 +88,26 @@ def test_learning_graph_rejects_failed_test_without_publishing(tmp_path):
     )
 
     assert result["final_status"] == "rejected"
+    assert result["failure_stage"] == "testing"
+    assert result["failure_reasons"] == ["参数变化测试未通过"]
     assert repository.list_published_skills() == []
+
+
+def test_learning_graph_reports_analysis_rejection_before_testing(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    dependencies = LearningDependencies(
+        repository=repository,
+        agents=RejectingAgents(),
+        tester=FakeTester(),
+        catalog={"version": "test"},
+    )
+
+    result = build_learning_graph(dependencies).invoke(
+        {"recording_id": str(uuid4()), "trace": {"api_exchanges": []}}
+    )
+
+    assert result["final_status"] == "rejected"
+    assert result["failure_stage"] == "analysis"
+    assert result["failure_reasons"] == ["未观察到允许的创建采购申请接口"]
+    assert "candidate_skill" not in result
+    assert "test_results" not in result
