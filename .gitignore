@@ -2,7 +2,6 @@
 .env.*
 !.env.example
 !.env.ai.example
-AGENTS.md
 .run/
 *.log
 __pycache__/
