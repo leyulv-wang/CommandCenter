@@ -18,6 +18,13 @@ BINDING_PROTOCOL_PROMPT = (
     "literal.item_name。不能写成 literal(...)、函数调用、代码或直接业务值。"
 )
 
+DEMONSTRATION_LITERAL_PROMPT = (
+    "员工在 UI 或 API 请求中直接输入、复用时会变化的值，应抽象为 "
+    "literal.<语义输入名>。这类运行时输入不要求预先存在于 task 上下文，"
+    "不能因此判定字段来源不确定。只有无法判断字段业务含义或关键请求未匹配时，"
+    "才设置 compilable=false。"
+)
+
 
 class AgentSuite:
     def __init__(self, model: StructuredModel):
@@ -32,8 +39,9 @@ class AgentSuite:
             DemonstrationAnalysis,
             (
                 "你是演示理解智能体。识别员工真正完成的业务动作，把页面证据与"
-                "允许的 API Tool 对齐。关键请求未匹配或字段来源不确定时 compilable=false。"
+                "允许的 API Tool 对齐。"
                 f"{BINDING_PROTOCOL_PROMPT}"
+                f"{DEMONSTRATION_LITERAL_PROMPT}"
             ),
             {"trace": trace, "catalog": catalog},
         )

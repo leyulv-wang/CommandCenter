@@ -134,6 +134,10 @@ def test_analysis_and_compilation_agents_share_generic_binding_protocol():
         assert "steps.create.output.data.id" in prompt
         assert "literal.item_name" in prompt
         assert "不能写成 literal(...)" in prompt
+    analysis_prompt = model.prompts[0]
+    assert "员工在 UI 或 API 请求中直接输入" in analysis_prompt
+    assert "不要求预先存在于 task 上下文" in analysis_prompt
+    assert "不能因此判定字段来源不确定" in analysis_prompt
 
 
 def test_structured_model_serializes_tool_catalog_for_agent_prompt():
