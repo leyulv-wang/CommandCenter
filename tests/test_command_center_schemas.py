@@ -70,15 +70,30 @@ def valid_extension_batch() -> dict[str, object]:
                     "origin": "https://example.test",
                     "path": "/orders",
                     "title": "Orders",
-                    "fingerprint": "sha256:page",
+                    "fingerprint": "hmac-sha256:" + "a" * 64,
                 },
                 "control": {
                     "role": "button",
                     "label": "Search",
-                    "selector_fingerprint": "sha256:control",
+                    "selector_fingerprint": "hmac-sha256:" + "b" * 64,
                 },
             }
         ],
+    }
+
+
+def valid_page_mutation(client_sequence: int) -> dict[str, object]:
+    return {
+        "mutation_id": str(uuid4()),
+        "client_sequence": client_sequence,
+        "occurred_at": datetime.now(UTC).isoformat(),
+        "page": {
+            "origin": "https://example.test",
+            "path": "/orders",
+            "fingerprint": "hmac-sha256:" + "c" * 64,
+        },
+        "mutation_type": "dom_change",
+        "changed_control_fingerprints": ["hmac-sha256:" + "d" * 64],
     }
 
 
@@ -103,12 +118,32 @@ def test_old_operation_trace_remains_valid():
 
     assert trace.capture_source == "playwright"
     assert trace.page_mutations == []
-    assert trace.redaction_summary == {}
+    assert trace.redaction_summary.redacted_field_count == 0
 
 
 def test_extension_batch_requires_one_recording_and_monotonic_client_sequence():
     payload = valid_extension_batch()
     payload["events"].append({**payload["events"][0], "event_id": str(uuid4())})
+
+    with pytest.raises(ValidationError):
+        schemas.ExtensionEventBatch.model_validate(payload)
+
+
+def test_extension_batch_allows_interleaved_event_and_mutation_sequences():
+    payload = valid_extension_batch()
+    second_event = {**payload["events"][0], "event_id": str(uuid4()), "client_sequence": 3}
+    payload["events"].append(second_event)
+    payload["page_mutations"] = [valid_page_mutation(2)]
+
+    batch = schemas.ExtensionEventBatch.model_validate(payload)
+
+    assert [event.client_sequence for event in batch.events] == [1, 3]
+    assert [mutation.client_sequence for mutation in batch.page_mutations] == [2]
+
+
+def test_extension_batch_rejects_sequence_reused_across_evidence_types():
+    payload = valid_extension_batch()
+    payload["page_mutations"] = [valid_page_mutation(1)]
 
     with pytest.raises(ValidationError):
         schemas.ExtensionEventBatch.model_validate(payload)
@@ -126,6 +161,56 @@ def test_extension_evidence_rejects_sensitive_raw_values():
     payload["events"][0]["network"] = {
         "request": {"authorization": "Bearer raw-secret"}
     }
+
+    with pytest.raises(ValidationError):
+        schemas.ExtensionEventBatch.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("origin", "https://user:password@example.test"),
+        ("origin", "https://example.test?session=private"),
+        ("origin", "https://example.test\nprivate"),
+        ("path", "/orders?token=private"),
+        ("path", "/orders\nprivate"),
+        ("fingerprint", "sha256:page"),
+    ],
+)
+def test_extension_page_evidence_rejects_unbounded_url_and_fingerprint_values(
+    field, value
+):
+    payload = valid_extension_batch()
+    payload["events"][0]["page"][field] = value
+
+    with pytest.raises(ValidationError):
+        schemas.ExtensionEventBatch.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "secret_label",
+    [
+        "Authorization: Bearer private",
+        "Cookie=session=private",
+        "X-Access-Token: private",
+        "API key: private",
+        "password: private",
+        "captcha=private",
+        "local-storage: private",
+        "file-content: private",
+    ],
+)
+def test_extension_control_text_rejects_sensitive_value_carriers(secret_label):
+    payload = valid_extension_batch()
+    payload["events"][0]["control"]["label"] = secret_label
+
+    with pytest.raises(ValidationError):
+        schemas.ExtensionEventBatch.model_validate(payload)
+
+
+def test_extension_redaction_summary_has_fixed_non_sensitive_fields():
+    payload = valid_extension_batch()
+    payload["redaction_summary"] = {"authorization": 1}
 
     with pytest.raises(ValidationError):
         schemas.ExtensionEventBatch.model_validate(payload)

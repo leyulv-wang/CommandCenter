@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import (
@@ -19,6 +20,71 @@ BindingExpression = Annotated[
     StringConstraints(pattern=r"^(task|steps|literal)\..+$"),
 ]
 
+EvidenceFingerprint = Annotated[
+    str,
+    StringConstraints(
+        strict=True,
+        pattern=r"^hmac-sha256:[a-f0-9]{64}$",
+    ),
+]
+EvidenceIdentifier = Annotated[
+    str,
+    StringConstraints(
+        strict=True,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$",
+    ),
+]
+EvidencePath = Annotated[
+    str,
+    StringConstraints(
+        strict=True,
+        min_length=1,
+        max_length=2_048,
+        pattern=r"^/[^\x00-\x1f\x7f?#]*$",
+    ),
+]
+SemanticEvidenceText = Annotated[
+    str,
+    StringConstraints(
+        strict=True,
+        min_length=1,
+        max_length=256,
+        pattern=r"^[^\x00-\x1f\x7f]+$",
+    ),
+]
+EvidenceOrigin = Annotated[
+    str,
+    StringConstraints(
+        strict=True,
+        min_length=1,
+        max_length=512,
+        pattern=r"^[^\x00-\x1f\x7f]+$",
+    ),
+]
+
+_SENSITIVE_TEXT_MARKERS = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "credential",
+        "token",
+        "apikey",
+        "password",
+        "captcha",
+        "localstorage",
+        "filecontent",
+    }
+)
+
+
+def _require_safe_semantic_text(value: str) -> str:
+    normalized = "".join(character for character in value.casefold() if character.isalnum())
+    if any(marker in normalized for marker in _SENSITIVE_TEXT_MARKERS):
+        raise ValueError("semantic evidence must not carry sensitive values")
+    return value
+
 
 class _EvidenceModel(BaseModel):
     """Strict, already-redacted evidence accepted from a browser capture client."""
@@ -29,23 +95,54 @@ class _EvidenceModel(BaseModel):
 class ControlDescriptor(_EvidenceModel):
     """Semantic control metadata; it deliberately excludes the entered value."""
 
-    role: str | None = None
-    label: str | None = None
-    accessible_name: str | None = None
-    input_type: str | None = None
-    selector_fingerprint: str
+    role: EvidenceIdentifier | None = None
+    label: SemanticEvidenceText | None = None
+    accessible_name: SemanticEvidenceText | None = None
+    input_type: EvidenceIdentifier | None = None
+    selector_fingerprint: EvidenceFingerprint
     required: bool | None = None
     enabled: bool | None = None
+
+    @field_validator("label", "accessible_name")
+    @classmethod
+    def reject_sensitive_semantic_text(cls, value: str | None) -> str | None:
+        return _require_safe_semantic_text(value) if value is not None else value
 
 
 class PageDescriptor(_EvidenceModel):
     """A page identity without raw query values or browser storage."""
 
-    origin: str
-    path: str
-    title: str | None = None
-    query_parameter_names: list[str] = Field(default_factory=list)
-    fingerprint: str
+    origin: EvidenceOrigin
+    path: EvidencePath
+    title: SemanticEvidenceText | None = None
+    query_parameter_names: list[EvidenceIdentifier] = Field(default_factory=list)
+    fingerprint: EvidenceFingerprint
+
+    @field_validator("origin")
+    @classmethod
+    def require_origin_only(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or any(character.isspace() for character in parsed.netloc)
+        ):
+            raise ValueError("origin must contain only scheme, host, and optional port")
+        try:
+            _ = parsed.port
+        except ValueError as error:
+            raise ValueError("origin port must be valid") from error
+        return value
+
+    @field_validator("title")
+    @classmethod
+    def reject_sensitive_title(cls, value: str | None) -> str | None:
+        return _require_safe_semantic_text(value) if value is not None else value
 
 
 class PageMutationEvidence(_EvidenceModel):
@@ -56,9 +153,9 @@ class PageMutationEvidence(_EvidenceModel):
     mutation_type: Literal[
         "navigation", "route_change", "dom_change", "form_state_change"
     ]
-    changed_control_fingerprints: list[str] = Field(default_factory=list)
-    before_fingerprint: str | None = None
-    after_fingerprint: str | None = None
+    changed_control_fingerprints: list[EvidenceFingerprint] = Field(default_factory=list)
+    before_fingerprint: EvidenceFingerprint | None = None
+    after_fingerprint: EvidenceFingerprint | None = None
 
 
 class RecordedBrowserEvent(_EvidenceModel):
@@ -68,7 +165,7 @@ class RecordedBrowserEvent(_EvidenceModel):
     event_type: Literal["click", "input", "select", "submit", "navigation"]
     page: PageDescriptor
     control: ControlDescriptor | None = None
-    value_fingerprint: str | None = None
+    value_fingerprint: EvidenceFingerprint | None = None
     mutation_ids: list[UUID] = Field(default_factory=list)
 
 
@@ -77,13 +174,16 @@ class RecordedNetworkExchange(_EvidenceModel):
     client_sequence: int = Field(ge=1)
     started_at: datetime
     completed_at: datetime
-    method: str
-    path_template: str
-    query_parameter_names: list[str] = Field(default_factory=list)
-    request_fingerprint: str | None = None
+    method: Annotated[
+        str,
+        StringConstraints(strict=True, min_length=3, max_length=10, pattern=r"^[A-Z]+$"),
+    ]
+    path_template: EvidencePath
+    query_parameter_names: list[EvidenceIdentifier] = Field(default_factory=list)
+    request_fingerprint: EvidenceFingerprint | None = None
     response_status: int
-    response_fingerprint: str | None = None
-    endpoint_fingerprint: str | None = None
+    response_fingerprint: EvidenceFingerprint | None = None
+    endpoint_fingerprint: EvidenceFingerprint | None = None
 
     @model_validator(mode="after")
     def require_ordered_timestamps(self) -> RecordedNetworkExchange:
@@ -92,29 +192,35 @@ class RecordedNetworkExchange(_EvidenceModel):
         return self
 
 
+class RedactionSummary(_EvidenceModel):
+    """Fixed aggregate counters; no redacted field names or values are retained."""
+
+    redacted_field_count: int = Field(default=0, ge=0)
+    fingerprinted_value_count: int = Field(default=0, ge=0)
+    dropped_evidence_count: int = Field(default=0, ge=0)
+
+
 class ExtensionEventBatch(_EvidenceModel):
     """One ordered, redacted extension upload for exactly one recording."""
 
     recording_id: UUID
     events: list[RecordedBrowserEvent | RecordedNetworkExchange] = Field(min_length=1)
     page_mutations: list[PageMutationEvidence] = Field(default_factory=list)
-    redaction_summary: dict[str, int] = Field(default_factory=dict)
-
-    @field_validator("redaction_summary")
-    @classmethod
-    def require_non_negative_redaction_counts(
-        cls, value: dict[str, int]
-    ) -> dict[str, int]:
-        if any(count < 0 for count in value.values()):
-            raise ValueError("redaction counts must be non-negative")
-        return value
+    redaction_summary: RedactionSummary = Field(default_factory=RedactionSummary)
 
     @model_validator(mode="after")
     def require_monotonic_client_sequence(self) -> ExtensionEventBatch:
-        sequences = [event.client_sequence for event in self.events]
-        sequences.extend(mutation.client_sequence for mutation in self.page_mutations)
-        if len(sequences) != len(set(sequences)) or sequences != sorted(sequences):
-            raise ValueError("extension client sequences must be unique and monotonic")
+        event_sequences = [event.client_sequence for event in self.events]
+        mutation_sequences = [mutation.client_sequence for mutation in self.page_mutations]
+        if (
+            event_sequences != sorted(event_sequences)
+            or mutation_sequences != sorted(mutation_sequences)
+            or len((*event_sequences, *mutation_sequences))
+            != len(set((*event_sequences, *mutation_sequences)))
+        ):
+            raise ValueError(
+                "extension client sequences must be unique and monotonic per evidence type"
+            )
         return self
 
 
@@ -156,7 +262,7 @@ class OperationTrace(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
     capture_source: Literal["playwright", "browser_extension"] = "playwright"
     page_mutations: list[PageMutationEvidence] = Field(default_factory=list)
-    redaction_summary: dict[str, int] = Field(default_factory=dict)
+    redaction_summary: RedactionSummary = Field(default_factory=RedactionSummary)
 
 
 class InputBinding(BaseModel):
