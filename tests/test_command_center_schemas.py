@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import app.command_center.schemas as schemas
 from app.command_center.schemas import (
@@ -214,6 +214,29 @@ def test_extension_redaction_summary_has_fixed_non_sensitive_fields():
 
     with pytest.raises(ValidationError):
         schemas.ExtensionEventBatch.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "credential_like_value",
+    [
+        "Bearer private-secret-value",
+        "Basic dXNlcjpwYXNzd29yZC1wcml2YXRl",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJwcml2YXRlLXVzZXIifQ.signaturevalue",
+        "sk-1234567890abcdefghijklmnop",
+        "ya29.a0AfH6SMCprivateGoogleToken",
+        "ghp_1234567890abcdefghijklmnopqrstuv",
+    ],
+)
+def test_evidence_identifiers_reject_common_credential_value_forms(
+    credential_like_value,
+):
+    with pytest.raises(ValidationError):
+        TypeAdapter(schemas.EvidenceIdentifier).validate_python(credential_like_value)
+
+
+@pytest.mark.parametrize("identifier", ["access_token", "sk-stage", "github_token"])
+def test_evidence_identifiers_allow_ordinary_parameter_names(identifier):
+    assert TypeAdapter(schemas.EvidenceIdentifier).validate_python(identifier) == identifier
 
 
 def test_skill_step_accepts_query_binding():

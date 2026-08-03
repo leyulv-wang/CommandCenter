@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import re
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import (
     BaseModel,
+    AfterValidator,
     ConfigDict,
     Field,
     StringConstraints,
@@ -19,6 +21,19 @@ BindingExpression = Annotated[
     str,
     StringConstraints(pattern=r"^(task|steps|literal)\..+$"),
 ]
+
+_CREDENTIAL_VALUE_PATTERNS = (
+    re.compile(r"^eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$"),
+    re.compile(r"^sk-[A-Za-z0-9_-]{20,}$"),
+    re.compile(r"^ya29\.[A-Za-z0-9_-]{16,}$"),
+    re.compile(r"^gh[pousr]_[A-Za-z0-9]{20,}$"),
+)
+
+
+def _require_non_credential_identifier(value: str) -> str:
+    if any(pattern.fullmatch(value) for pattern in _CREDENTIAL_VALUE_PATTERNS):
+        raise ValueError("evidence identifier must not contain a credential value")
+    return value
 
 EvidenceFingerprint = Annotated[
     str,
@@ -35,6 +50,7 @@ EvidenceIdentifier = Annotated[
         max_length=128,
         pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$",
     ),
+    AfterValidator(_require_non_credential_identifier),
 ]
 EvidencePath = Annotated[
     str,
