@@ -126,3 +126,25 @@ def test_loader_caches_by_profile_and_openapi_url():
     assert cached is first
     assert other != first
     assert request_count == 2
+
+
+def test_loader_context_manager_closes_internally_created_client():
+    with OpenAPIDocumentLoader() as loader:
+        pass
+
+    with pytest.raises(RuntimeError, match="closed"):
+        loader.load(profile_for_url())
+
+
+def test_loader_close_does_not_close_injected_client():
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"still": "open"})
+        )
+    )
+    loader = OpenAPIDocumentLoader(client)
+
+    loader.close()
+
+    assert client.get("http://mes.example.test/health").json() == {"still": "open"}
+    client.close()

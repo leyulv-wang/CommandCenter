@@ -10,8 +10,19 @@ from app.command_center.system_profiles import SystemProfile
 
 class OpenAPIDocumentLoader:
     def __init__(self, client: httpx.Client | None = None) -> None:
+        self._owns_client = client is None
         self._client = client or httpx.Client()
         self._cache: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def __enter__(self) -> OpenAPIDocumentLoader:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
 
     def load(self, profile: SystemProfile) -> dict[str, Any]:
         profile_key = json.dumps(profile.model_dump(mode="json"), sort_keys=True)

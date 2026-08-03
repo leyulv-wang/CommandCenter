@@ -189,8 +189,9 @@ def _tool_from_operation(
     side_effect: Literal["read", "write"],
     credential_header: str | None,
 ) -> ToolDefinition:
-    parameters = _operation_parameters(path_item, operation)
-    content_type, body_schema = _request_body(document, operation, parameters)
+    parameter_items = _merged_parameter_items(path_item, operation)
+    parameters = _tool_parameters(parameter_items)
+    content_type, body_schema = _request_body(document, operation, parameter_items)
     return ToolDefinition(
         tool_id=f"{system_code}:{operation['operationId']}",
         system_code=system_code,
@@ -212,9 +213,9 @@ def _tool_from_operation(
     )
 
 
-def _operation_parameters(
+def _merged_parameter_items(
     path_item: dict[str, Any], operation: dict[str, Any]
-) -> tuple[ToolParameter, ...]:
+) -> tuple[dict[str, Any], ...]:
     merged: dict[tuple[str, str], dict[str, Any]] = {}
     for item in [*path_item.get("parameters", []), *operation.get("parameters", [])]:
         if "$ref" in item:
@@ -232,6 +233,12 @@ def _operation_parameters(
             continue
         merged[(name, location)] = item
 
+    return tuple(merged.values())
+
+
+def _tool_parameters(
+    parameter_items: tuple[dict[str, Any], ...],
+) -> tuple[ToolParameter, ...]:
     return tuple(
         ToolParameter(
             name=item["name"],
@@ -240,14 +247,14 @@ def _operation_parameters(
             required=bool(item.get("required", False)),
             description=item.get("description"),
         )
-        for item in merged.values()
+        for item in parameter_items
     )
 
 
 def _request_body(
     document: dict[str, Any],
     operation: dict[str, Any],
-    parameters: tuple[ToolParameter, ...],
+    parameter_items: tuple[dict[str, Any], ...],
 ) -> tuple[str | None, dict[str, Any]]:
     content = operation.get("requestBody", {}).get("content", {})
     if content:
@@ -256,15 +263,14 @@ def _request_body(
         return content_type, schema
 
     body_parameter = next(
-        (
-            item
-            for item in operation.get("parameters", [])
-            if item.get("in") == "body"
-        ),
+        (item for item in parameter_items if item.get("in") == "body"),
         None,
     )
+    has_form_data = any(item.get("in") == "formData" for item in parameter_items)
     consumes = operation.get("consumes") or document.get("consumes") or []
-    content_type = next(iter(consumes), None) if parameters else None
+    content_type = (
+        next(iter(consumes), None) if body_parameter is not None or has_form_data else None
+    )
     return content_type, body_parameter.get("schema", {}) if body_parameter else {}
 
 

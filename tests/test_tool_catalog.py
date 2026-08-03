@@ -39,6 +39,7 @@ def test_swagger2_query_parameters_enter_allowlisted_tool():
     )
     document = {
         "swagger": "2.0",
+        "consumes": ["application/json"],
         "paths": {
             "/jeecg-boot/purchase/apply/list": {
                 "get": {
@@ -72,6 +73,7 @@ def test_swagger2_query_parameters_enter_allowlisted_tool():
     assert tool.description == "采购申请-分页列表查询"
     assert tool.side_effect == "read"
     assert tool.query_parameters["applyNo"].type == "string"
+    assert tool.content_type is None
     assert {(parameter.name, parameter.location) for parameter in tool.parameters} == {
         ("applyNo", "query"),
         ("X-Tenant-Id", "header"),
@@ -149,6 +151,77 @@ def test_swagger2_body_schema_and_path_parameter_are_preserved():
         ("order_id", "path"),
         ("payload", "body"),
     }
+
+
+def test_swagger2_path_level_body_parameter_provides_body_schema():
+    path = "/api/orders"
+    profile = profile_for("POST", path, side_effect="write")
+    document = {
+        "swagger": "2.0",
+        "consumes": ["application/json"],
+        "paths": {
+            path: {
+                "parameters": [
+                    {
+                        "name": "payload",
+                        "in": "body",
+                        "required": True,
+                        "schema": {
+                            "type": "object",
+                            "properties": {"quantity": {"type": "integer"}},
+                        },
+                    }
+                ],
+                "post": {"operationId": "createOrder"},
+            }
+        },
+    }
+
+    tool = ToolCatalog.from_system_profile(document, profile).get(
+        "yifeng_mes:createOrder"
+    )
+
+    assert tool.content_type == "application/json"
+    assert tool.body_schema == {
+        "type": "object",
+        "properties": {"quantity": {"type": "integer"}},
+    }
+
+
+def test_swagger2_operation_body_parameter_overrides_path_level_schema():
+    path = "/api/orders"
+    profile = profile_for("POST", path, side_effect="write")
+    document = {
+        "swagger": "2.0",
+        "consumes": ["application/json"],
+        "paths": {
+            path: {
+                "parameters": [
+                    {
+                        "name": "payload",
+                        "in": "body",
+                        "schema": {"type": "object", "required": ["legacy"]},
+                    }
+                ],
+                "post": {
+                    "operationId": "createOrder",
+                    "parameters": [
+                        {
+                            "name": "payload",
+                            "in": "body",
+                            "schema": {"type": "object", "required": ["current"]},
+                        }
+                    ],
+                },
+            }
+        },
+    }
+
+    tool = ToolCatalog.from_system_profile(document, profile).get(
+        "yifeng_mes:createOrder"
+    )
+
+    assert tool.body_schema == {"type": "object", "required": ["current"]}
 
 
 def test_catalog_matches_only_explicitly_allowlisted_operations():
