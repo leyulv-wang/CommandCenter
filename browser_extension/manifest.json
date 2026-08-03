@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "description": "Test-only selected-tab UI recorder shell.",
   "permissions": ["activeTab", "debugger"],
-  "host_permissions": ["http://yifeng.dtsum.com/*"],
+  "host_permissions": [
+    "http://yifeng.dtsum.com/*",
+    "http://127.0.0.1:8000/*"
+  ],
   "background": { "service_worker": "background.mjs", "type": "module" },
   "action": { "default_popup": "popup.html" },
   "content_scripts": [{

@@ -1,6 +1,8 @@
 import json
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -14,7 +16,11 @@ from app.command_center.execution_graph import (
     build_execution_graph,
 )
 from app.command_center.learning_graph import LearningDependencies, build_learning_graph
+from app.command_center.credential_vault import EphemeralCredentialVault
+from app.command_center.extension_recorder import ExtensionRecorder
 from app.command_center.model import StructuredModel
+from app.command_center.openapi_loader import OpenAPIDocumentLoader
+from app.command_center.readonly_testing import ReadOnlySkillTestService
 from app.command_center.recorder import RecorderService
 from app.command_center.repository import CommandCenterRepository
 from app.command_center.router import create_router
@@ -24,6 +30,7 @@ from app.command_center.testing import (
     LocalFixtureService,
     SkillRunner,
 )
+from app.command_center.system_profiles import SystemProfile, load_system_profile
 from app.command_center.tool_catalog import ToolCatalog
 from app.command_center.tool_executor import ToolExecutor
 from app.ai_config.generator import generate_form_config
@@ -40,6 +47,33 @@ app = FastAPI(title="Configurable Form Agent MVP")
 external_system_client = ExternalSystemClient()
 _command_center_service: CommandCenterService | None = None
 
+
+class ProfileCatalogRegistry:
+    def __init__(
+        self,
+        profiles: dict[str, SystemProfile],
+        loader: OpenAPIDocumentLoader,
+    ) -> None:
+        self.profiles = profiles
+        self.loader = loader
+
+    def get(self, system_code: str) -> ToolCatalog:
+        profile = self.profiles[system_code]
+        document = self.loader.load(profile)
+        return ToolCatalog.from_system_profile(document, profile)
+
+
+@dataclass
+class CommandCenterComponents:
+    profiles: dict[str, SystemProfile]
+    catalogs: ProfileCatalogRegistry
+    credential_vault: EphemeralCredentialVault
+    extension_recorder: ExtensionRecorder
+    local_tester: Any
+    readonly_tester_factory: Any
+    learning_graph_factory: Any
+    service: CommandCenterService
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -52,6 +86,7 @@ app.add_middleware(
         "http://127.0.0.1:8102",
         "http://localhost:8102",
     ],
+    allow_origin_regex=r"^chrome-extension://[a-p]{32}$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -248,61 +283,138 @@ def _reset_demo_system(system_code: str) -> dict[str, object]:
         raise HTTPException(status_code=502, detail=f"外部系统重置失败：{exc}") from exc
 
 
-def _build_command_center_service() -> CommandCenterService:
-    base_urls = {
-        "connected_system": "http://127.0.0.1:8101",
+def build_command_center_components(
+    *,
+    database_url: str = "sqlite:///app/data/command_center.sqlite3",
+    client: httpx.Client | None = None,
+    profiles: dict[str, SystemProfile] | None = None,
+    repository: CommandCenterRepository | None = None,
+    agents: Any | None = None,
+    local_catalog: ToolCatalog | None = None,
+    local_tester: Any | None = None,
+    execution_graph: Any | None = None,
+    openapi_loader: OpenAPIDocumentLoader | None = None,
+) -> CommandCenterComponents:
+    """Compose local and lazy real-system capabilities without contacting MES."""
+
+    client = client or httpx.Client(timeout=30)
+    repository = repository or CommandCenterRepository(database_url)
+    agents = agents or AgentSuite(StructuredModel.from_environment())
+    profiles = profiles or {
+        "yifeng_mes": load_system_profile(
+            Path("app/data/system_profiles/yifeng_mes.json")
+        )
     }
-    client = httpx.Client(timeout=30)
-    documents = {
-        system_code: client.get(f"{base_url}/openapi.json").raise_for_status().json()
-        for system_code, base_url in base_urls.items()
-    }
-    allowlist = {
-        ("connected_system", "create_purchase_request_api_purchase_requests_post"),
-    }
-    catalog = ToolCatalog.from_openapi_documents(
-        documents,
-        base_urls,
-        allowlist,
+    loader = openapi_loader or OpenAPIDocumentLoader(
+        client,
+        cache_ttl_seconds=300,
+        max_cache_entries=max(4, len(profiles)),
     )
-    repository = CommandCenterRepository(
-        "sqlite:///app/data/command_center.sqlite3"
-    )
-    agents = AgentSuite(StructuredModel.from_environment())
-    runner = SkillRunner(ToolExecutor(catalog, client))
-    fixture = LocalFixtureService(client=client, base_urls=base_urls)
-    harmless_tests = HarmlessTestService(
-        fixture_service=fixture,
-        runner=runner,
-        verifier=agents,
-    )
-    learning_graph = build_learning_graph(
+    catalogs = ProfileCatalogRegistry(profiles, loader)
+
+    base_urls = {"connected_system": "http://127.0.0.1:8101"}
+    if local_catalog is None:
+        local_document = (
+            client.get(f"{base_urls['connected_system']}/openapi.json")
+            .raise_for_status()
+            .json()
+        )
+        local_catalog = ToolCatalog.from_openapi_documents(
+            {"connected_system": local_document},
+            base_urls,
+            {
+                (
+                    "connected_system",
+                    "create_purchase_request_api_purchase_requests_post",
+                )
+            },
+        )
+
+    local_runner = SkillRunner(ToolExecutor(local_catalog, client))
+    if local_tester is None:
+        local_tester = HarmlessTestService(
+            fixture_service=LocalFixtureService(client=client, base_urls=base_urls),
+            runner=local_runner,
+            verifier=agents,
+        )
+    local_learning_graph = build_learning_graph(
         LearningDependencies(
             repository=repository,
             agents=agents,
-            tester=harmless_tests,
+            tester=local_tester,
+            catalog=local_catalog,
+            publish_policy="auto_publish",
+        )
+    )
+    if execution_graph is None:
+        execution_graph = build_execution_graph(
+            ExecutionDependencies(
+                skills=repository.list_published_skills,
+                business_reader=LocalBusinessReader(client, base_urls),
+                agents=agents,
+                runner=local_runner,
+            )
+        )
+
+    credential_vault = EphemeralCredentialVault()
+    extension_recorder = ExtensionRecorder(
+        catalog_provider=lambda profile: catalogs.get(profile.system_code),
+        credential_vault=credential_vault,
+    )
+
+    def readonly_tester_factory(
+        system_code: str,
+        recording_id: UUID,
+    ) -> ReadOnlySkillTestService:
+        catalog = catalogs.get(system_code)
+        executor = ToolExecutor(
+            catalog,
+            client,
+            credential_provider=lambda _: credential_vault.headers_for(recording_id),
+        )
+        return ReadOnlySkillTestService(
             catalog=catalog,
+            runner=SkillRunner(executor),
         )
-    )
-    business_reader = LocalBusinessReader(client, base_urls)
-    execution_graph = build_execution_graph(
-        ExecutionDependencies(
-            skills=repository.list_published_skills,
-            business_reader=business_reader,
-            agents=agents,
-            runner=runner,
+
+    def learning_graph_factory(system_code: str, recording_id: UUID):
+        catalog = catalogs.get(system_code)
+        return build_learning_graph(
+            LearningDependencies(
+                repository=repository,
+                agents=agents,
+                tester=readonly_tester_factory(system_code, recording_id),
+                catalog=catalog,
+                publish_policy="verified_candidate",
+            )
         )
-    )
-    recorder = RecorderService(
-        catalog,
-        Path("app/data/command_center_evidence"),
-    )
-    return CommandCenterService(
+
+    service = CommandCenterService(
         repository=repository,
-        recorder=recorder,
-        learning_graph=learning_graph,
+        recorder=RecorderService(
+            local_catalog,
+            Path("app/data/command_center_evidence"),
+        ),
+        learning_graph=local_learning_graph,
         execution_graph=execution_graph,
+        extension_recorder=extension_recorder,
+        system_profiles=profiles,
+        learning_graph_factory=learning_graph_factory,
     )
+    return CommandCenterComponents(
+        profiles=profiles,
+        catalogs=catalogs,
+        credential_vault=credential_vault,
+        extension_recorder=extension_recorder,
+        local_tester=local_tester,
+        readonly_tester_factory=readonly_tester_factory,
+        learning_graph_factory=learning_graph_factory,
+        service=service,
+    )
+
+
+def _build_command_center_service() -> CommandCenterService:
+    return build_command_center_components().service
 
 
 @app.post("/ai/form-config/generate", response_model=GenerateFormConfigResponse)

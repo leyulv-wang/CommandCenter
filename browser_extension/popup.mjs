@@ -11,7 +11,13 @@ function render(status) {
   const capturing = Boolean(status?.capturing);
   statusText.textContent = status?.paused
     ? '录制已暂停：所选标签页已离开允许的站点'
-    : capturing ? `正在录制（${status.eventCount} 个事件）` : '未录制';
+    : capturing
+      ? `正在录制（${status.eventCount} 个待上传事件）`
+      : status?.learningStatus === 'verified_candidate'
+        ? '只读 Skill 已验证，状态：verified_candidate'
+        : status?.learningStatus
+          ? `演示处理结果：${status.learningStatus}`
+          : '未录制';
   startButton.disabled = !selectedTabMatchesProfile || capturing;
   stopButton.disabled = !capturing;
 }

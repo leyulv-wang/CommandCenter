@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -9,10 +11,24 @@ from app.command_center.system_profiles import SystemProfile
 
 
 class OpenAPIDocumentLoader:
-    def __init__(self, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        *,
+        cache_ttl_seconds: int = 300,
+        max_cache_entries: int = 8,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if type(cache_ttl_seconds) is not int or cache_ttl_seconds <= 0:
+            raise ValueError("cache TTL must be a positive integer")
+        if type(max_cache_entries) is not int or max_cache_entries <= 0:
+            raise ValueError("cache size must be a positive integer")
         self._owns_client = client is None
         self._client = client or httpx.Client()
-        self._cache: dict[tuple[str, str], dict[str, Any]] = {}
+        self._cache_ttl_seconds = cache_ttl_seconds
+        self._max_cache_entries = max_cache_entries
+        self._clock = clock
+        self._cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 
     def __enter__(self) -> OpenAPIDocumentLoader:
         return self
@@ -27,9 +43,12 @@ class OpenAPIDocumentLoader:
     def load(self, profile: SystemProfile) -> dict[str, Any]:
         profile_key = json.dumps(profile.model_dump(mode="json"), sort_keys=True)
         cache_key = (profile_key, str(profile.openapi_url))
+        now = self._clock()
         cached = self._cache.get(cache_key)
+        if cached is not None and now - cached[0] < self._cache_ttl_seconds:
+            return cached[1]
         if cached is not None:
-            return cached
+            self._cache.pop(cache_key, None)
 
         maximum_bytes = profile.limits.max_response_bytes
         with self._client.stream(
@@ -57,7 +76,10 @@ class OpenAPIDocumentLoader:
         document = json.loads(b"".join(chunks))
         if not isinstance(document, dict):
             raise ValueError("OpenAPI document must be a JSON object")
-        self._cache[cache_key] = document
+        if len(self._cache) >= self._max_cache_entries:
+            oldest_key = min(self._cache, key=lambda key: self._cache[key][0])
+            self._cache.pop(oldest_key, None)
+        self._cache[cache_key] = (now, document)
         return document
 
 

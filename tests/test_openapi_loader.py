@@ -148,3 +148,25 @@ def test_loader_close_does_not_close_injected_client():
 
     assert client.get("http://mes.example.test/health").json() == {"still": "open"}
     client.close()
+
+
+def test_loader_cache_expires_after_bounded_ttl():
+    now = [0.0]
+    request_count = 0
+
+    def handler(request):
+        nonlocal request_count
+        request_count += 1
+        return httpx.Response(200, json={"swagger": "2.0", "revision": request_count})
+
+    loader = OpenAPIDocumentLoader(
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        cache_ttl_seconds=5,
+        clock=lambda: now[0],
+    )
+    first = loader.load(profile_for_url())
+    now[0] = 4.0
+    assert loader.load(profile_for_url()) is first
+    now[0] = 5.0
+
+    assert loader.load(profile_for_url())["revision"] == 2

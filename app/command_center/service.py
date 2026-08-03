@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from fastapi.encoders import jsonable_encoder
 
 from app.command_center.repository import CommandCenterRepository
+from app.command_center.schemas import ExtensionEventBatch
 
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ class CommandCenterService:
         execution_graph: Any,
         extension_recorder: Any | None = None,
         system_profiles: dict[str, Any] | None = None,
+        learning_graph_factory: Any | None = None,
     ):
         self.repository = repository
         self.recorder = recorder
@@ -29,6 +31,7 @@ class CommandCenterService:
         self.execution_graph = execution_graph
         self.extension_recorder = extension_recorder
         self.system_profiles = system_profiles or {}
+        self.learning_graph_factory = learning_graph_factory
 
     def create_recording(self, request: Any) -> dict[str, Any]:
         recording_id = uuid4()
@@ -135,7 +138,8 @@ class CommandCenterService:
         self.repository.get_recording(identifier)
         if self.extension_recorder is None:
             raise ValueError("browser extension recorder is not configured")
-        self.extension_recorder.ingest(identifier, batch, token)
+        validated = ExtensionEventBatch.model_validate(batch)
+        self.extension_recorder.ingest(identifier, validated, token)
 
     def put_extension_credential(
         self,
@@ -159,9 +163,32 @@ class CommandCenterService:
         recording = self.repository.get_recording(identifier)
         if self.extension_recorder is None:
             raise ValueError("browser extension recorder is not configured")
-        trace = self.extension_recorder.stop(identifier, token)
-        recording["status"] = "recorded"
+        trace = self.extension_recorder.stop(
+            identifier,
+            token,
+            retain_credentials=self.learning_graph_factory is not None,
+        )
         recording["trace"] = trace.model_dump(mode="json")
+        if self.learning_graph_factory is None:
+            recording["status"] = "recorded"
+            self.repository.save_recording(identifier, recording)
+            self.extension_recorder.clear_credentials(identifier)
+            return recording
+        recording["status"] = "analyzing"
+        self.repository.save_recording(identifier, recording)
+        graph = self.learning_graph_factory(
+            str(recording["source_system"]), identifier
+        )
+        try:
+            result = graph.invoke(
+                {"recording_id": str(identifier), "trace": recording["trace"]}
+            )
+        finally:
+            self.extension_recorder.clear_credentials(identifier)
+        recording["status"] = str(result.get("final_status", "rejected"))
+        recording["learning_result"] = jsonable_encoder(result)
+        if result.get("failure_reasons"):
+            recording["failure_reasons"] = result["failure_reasons"]
         self.repository.save_recording(identifier, recording)
         return recording
 

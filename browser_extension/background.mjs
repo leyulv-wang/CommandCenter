@@ -6,10 +6,70 @@ import {
 } from './shared/redaction.mjs';
 
 const PROFILE_ORIGIN = 'http://yifeng.dtsum.com';
+const COMMAND_CENTER_ORIGIN = 'http://127.0.0.1:8000';
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_BUFFERED_EVENTS = 500;
 const STATIC_RESOURCE_TYPES = new Set(['Font', 'Image', 'Manifest', 'Media', 'Script', 'Stylesheet']);
 let capture = null;
+let lastLearningResult = null;
+
+function recordingHeaders(session) {
+  return {
+    'Content-Type': 'application/json',
+    'X-CommandCenter-Recording-Token': session.recordingToken,
+  };
+}
+
+async function requireJson(response) {
+  if (!response.ok) throw new Error(`CommandCenter request failed (${response.status}).`);
+  return response.json();
+}
+
+export function createRecordingApi(fetchImpl = fetch, baseUrl = COMMAND_CENTER_ORIGIN) {
+  const request = (path, options = {}) => fetchImpl(`${baseUrl}${path}`, options);
+  return {
+    async start() {
+      const created = await requireJson(await request('/recordings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          objective: '查询采购申请',
+          source_system: 'yifeng_mes',
+          source_task_id: 'browser-extension-demonstration',
+          capture_source: 'browser_extension',
+        }),
+      }));
+      const started = await requireJson(await request(
+        `/recordings/${created.recording_id}/extension/start`,
+        { method: 'POST' },
+      ));
+      return {
+        recordingId: created.recording_id,
+        recordingToken: started.recording_token,
+      };
+    },
+    async events(session, batch) {
+      return requireJson(await request(`/recordings/${session.recordingId}/extension/events`, {
+        method: 'POST', headers: recordingHeaders(session), body: JSON.stringify(batch),
+      }));
+    },
+    async credential(session, name, secret) {
+      const response = await request(`/recordings/${session.recordingId}/extension/credential`, {
+        method: 'PUT',
+        headers: recordingHeaders(session),
+        body: JSON.stringify({ name, secret }),
+      });
+      if (!response.ok) throw new Error(`CommandCenter request failed (${response.status}).`);
+    },
+    async stop(session) {
+      return requireJson(await request(`/recordings/${session.recordingId}/extension/stop`, {
+        method: 'POST', headers: recordingHeaders(session),
+      }));
+    },
+  };
+}
+
+const recordingApi = createRecordingApi();
 
 function exactOrigin(value) {
   try {
@@ -18,6 +78,93 @@ function exactOrigin(value) {
   } catch {
     return null;
   }
+}
+
+function safeSemanticText(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.trim().slice(0, 256);
+  if (!text || /authorization|cookie|credential|token|api\s*key|password|captcha|local.?storage|file.?content/i.test(text)) return null;
+  return text;
+}
+
+function safeIdentifier(value) {
+  if (typeof value !== 'string') return null;
+  const candidate = value.trim().slice(0, 128);
+  return /^[A-Za-z][A-Za-z0-9_.-]*$/.test(candidate) ? candidate : null;
+}
+
+function nextClientSequence() {
+  if (!capture) throw new Error('No active recording.');
+  capture.clientSequence += 1;
+  return capture.clientSequence;
+}
+
+async function recordedUiEvent(raw, sender) {
+  const action = raw?.actionType === 'change' ? 'select' : raw?.actionType;
+  if (!['click', 'input', 'select', 'submit', 'navigation'].includes(action)) return null;
+  const senderUrl = new URL(sender.tab.url);
+  const control = raw.control ?? {};
+  const controlFingerprint = await hmacFingerprint(JSON.stringify(control), capture.fingerprintKey);
+  const value = typeof raw.valueAfter === 'string' ? raw.valueAfter : null;
+  const descriptor = {
+    selector_fingerprint: controlFingerprint,
+  };
+  const role = safeIdentifier(control.role || control.tag);
+  const inputType = safeIdentifier(control.type);
+  const label = safeSemanticText(control.label);
+  const accessibleName = safeSemanticText(control.name || control.placeholder);
+  if (role) descriptor.role = role;
+  if (inputType) descriptor.input_type = inputType;
+  if (label) descriptor.label = label;
+  if (accessibleName) descriptor.accessible_name = accessibleName;
+  return {
+    event_id: crypto.randomUUID(),
+    client_sequence: nextClientSequence(),
+    occurred_at: new Date(Number.isFinite(raw.timestamp) ? raw.timestamp : Date.now()).toISOString(),
+    event_type: action,
+    page: {
+      origin: senderUrl.origin,
+      path: senderUrl.pathname || '/',
+      fingerprint: await hmacFingerprint(`${senderUrl.origin}${senderUrl.pathname}`, capture.fingerprintKey),
+    },
+    control: descriptor,
+    value_fingerprint: value ? await hmacFingerprint(value, capture.fingerprintKey) : null,
+  };
+}
+
+function recordedNetworkEvent(raw) {
+  const completed = new Date();
+  const started = new Date(completed.getTime() - Math.max(0, Number(raw.durationMs) || 0));
+  return {
+    exchange_id: crypto.randomUUID(),
+    client_sequence: nextClientSequence(),
+    started_at: started.toISOString(),
+    completed_at: completed.toISOString(),
+    method: raw.method,
+    path_template: raw.path,
+    query_parameter_names: raw.queryParameterNames ?? [],
+    request_fingerprint: raw.requestFingerprint,
+    response_status: raw.status ?? 0,
+    response_fingerprint: raw.responseFingerprint,
+    endpoint_fingerprint: raw.endpointFingerprint,
+  };
+}
+
+async function uploadPendingEvidence() {
+  if (!capture || capture.events.length === 0) return;
+  const events = capture.events.slice();
+  await recordingApi.events(capture, {
+    batch_id: crypto.randomUUID(),
+    recording_id: capture.recordingId,
+    events,
+    redaction_summary: {
+      redacted_field_count: 0,
+      fingerprinted_value_count: events.length,
+      dropped_evidence_count: capture.droppedEvents,
+    },
+  });
+  capture.events.splice(0, events.length);
+  capture.droppedEvents = 0;
 }
 
 function headerValue(headers, wantedName) {
@@ -327,14 +474,16 @@ function chromeAdapter(chromeApi) {
     },
     async sendEvidence(batch) {
       if (!capture) return;
-      capture.events.push(...batch);
+      capture.events.push(...batch.map(recordedNetworkEvent));
       if (capture.events.length > MAX_BUFFERED_EVENTS) {
+        capture.droppedEvents += capture.events.length - MAX_BUFFERED_EVENTS;
         capture.events.splice(0, capture.events.length - MAX_BUFFERED_EVENTS);
       }
+      await uploadPendingEvidence();
     },
-    async sendCredential() {
-      // Task 7 supplies the authenticated dedicated credential transport.
-      // Until then, the observer retains the credential only in its private memory.
+    async sendCredential(name, value) {
+      if (!capture) return;
+      await recordingApi.credential(capture, name, value);
     },
   };
 }
@@ -373,8 +522,18 @@ function status() {
         tabId: capture.tabId,
         origin: capture.origin,
         eventCount: capture.events.length,
+        recordingId: capture.recordingId,
+        learningStatus: null,
       }
-    : { capturing: false, paused: false, tabId: null, origin: null, eventCount: 0 };
+    : {
+        capturing: false,
+        paused: false,
+        tabId: null,
+        origin: null,
+        eventCount: 0,
+        recordingId: lastLearningResult?.recording_id ?? null,
+        learningStatus: lastLearningResult?.status ?? null,
+      };
 }
 
 function isTrustedPopupSender(sender) {
@@ -402,9 +561,19 @@ async function startSelectedTabCapture() {
   }
 
   const session = sessionFor(tab, origin);
-  capture = { ...session, events: [], paused: false };
   try {
     await attachToTab(tab.id, origin);
+    const backendSession = await recordingApi.start();
+    capture = {
+      ...session,
+      ...backendSession,
+      events: [],
+      paused: false,
+      fingerprintKey: crypto.randomUUID(),
+      clientSequence: 0,
+      droppedEvents: 0,
+    };
+    lastLearningResult = null;
     await chromeApi.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.START_CAPTURE, session });
   } catch (error) {
     await detachFromTab(tab.id).catch(() => {});
@@ -416,17 +585,23 @@ async function startSelectedTabCapture() {
 
 async function stopCapture(expectedCapture = capture) {
   if (!expectedCapture || capture !== expectedCapture) return status();
+  let result = null;
   try {
-    await flushBatch();
-  } finally {
-    await detachFromTab(expectedCapture.tabId).catch(() => {});
     await chromeApi.tabs.sendMessage(expectedCapture.tabId, {
       type: MESSAGE_TYPES.STOP_CAPTURE,
       sessionId: expectedCapture.id,
     }).catch(() => {});
+    await flushBatch();
+    await uploadPendingEvidence();
+    await detachFromTab(expectedCapture.tabId).catch(() => {});
+    result = await recordingApi.stop(expectedCapture);
+    lastLearningResult = result;
+  } finally {
+    await detachFromTab(expectedCapture.tabId).catch(() => {});
+    expectedCapture.recordingToken = null;
     if (capture === expectedCapture) capture = null;
   }
-  return status();
+  return { ...status(), learningResult: result?.learning_result ?? null };
 }
 
 if (chromeApi) {
@@ -468,8 +643,16 @@ if (chromeApi) {
           && sender.id === chromeApi.runtime.id && sender.tab?.id === capture.tabId) {
         const senderOrigin = sender.origin || tabOrigin(sender.tab);
         if (senderOrigin === capture.origin && message.sessionId === capture.id) {
-          capture.events.push(message.event);
-          if (capture.events.length > MAX_BUFFERED_EVENTS) capture.events.shift();
+          const event = await recordedUiEvent(message.event, sender);
+          if (event) {
+            capture.events.push(event);
+            if (capture.events.length > MAX_BUFFERED_EVENTS) {
+              capture.events.shift();
+              capture.droppedEvents++;
+            }
+          } else {
+            capture.droppedEvents++;
+          }
         }
       }
       return status();

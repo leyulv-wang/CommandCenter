@@ -5,6 +5,7 @@ import hmac
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -45,11 +46,15 @@ class ExtensionRecorder:
 
     def __init__(
         self,
-        catalog: ToolCatalog,
+        catalog: ToolCatalog | None = None,
         *,
+        catalog_provider: Callable[[SystemProfile], ToolCatalog] | None = None,
         credential_vault: EphemeralCredentialVault | None = None,
     ) -> None:
+        if catalog is None and catalog_provider is None:
+            raise ValueError("a Tool catalog or catalog provider is required")
         self.catalog = catalog
+        self.catalog_provider = catalog_provider
         self.credential_vault = credential_vault or EphemeralCredentialVault()
         self.sessions: dict[UUID, _ExtensionSession] = {}
 
@@ -62,13 +67,23 @@ class ExtensionRecorder:
     ) -> IngestGrant:
         if recording_id in self.sessions:
             raise ValueError("extension recording is already active")
+        try:
+            catalog = (
+                self.catalog_provider(profile)
+                if self.catalog_provider is not None
+                else self.catalog
+            )
+        except Exception as error:
+            raise ValueError("system API catalog is temporarily unavailable") from error
+        if catalog is None:
+            raise ValueError("system API catalog is temporarily unavailable")
         token = secrets.token_urlsafe(32)
         self.sessions[recording_id] = _ExtensionSession(
             builder=OperationTraceBuilder(
                 recording_id=recording_id,
                 objective=objective,
                 source_task=source_task,
-                catalog=self.catalog,
+                catalog=catalog,
                 started_at=datetime.now(UTC),
                 capture_source="browser_extension",
             ),
@@ -164,13 +179,27 @@ class ExtensionRecorder:
             raise ValueError("credential header is not allowed for this profile")
         self.credential_vault.put(recording_id, session.profile.credential_header, secret)
 
-    def stop(self, recording_id: UUID, token: str) -> OperationTrace:
+    def stop(
+        self,
+        recording_id: UUID,
+        token: str,
+        *,
+        retain_credentials: bool = False,
+    ) -> OperationTrace:
         session = self._authorized_session(recording_id, token)
         try:
-            return session.builder.finalize()
+            trace = session.builder.finalize()
+            if not retain_credentials:
+                self.credential_vault.clear(recording_id)
+            return trace
+        except Exception:
+            self.credential_vault.clear(recording_id)
+            raise
         finally:
             self.sessions.pop(recording_id, None)
-            self.credential_vault.clear(recording_id)
+
+    def clear_credentials(self, recording_id: UUID) -> None:
+        self.credential_vault.clear(recording_id)
 
     def abort(self, recording_id: UUID) -> None:
         self.sessions.pop(recording_id, None)
