@@ -118,6 +118,20 @@ def test_redactor_removes_generic_api_key_and_access_token_headers():
     }
 
 
+def test_redactor_preserves_count_headers_adjacent_to_sensitive_names():
+    redactor = TraceRedactor(fingerprint_key=b"test-key")
+
+    assert redactor.redact_headers(
+        {
+            "X-API-Key-Count": "2",
+            "Access-Token-Count": "3",
+        }
+    ) == {
+        "X-API-Key-Count": "2",
+        "Access-Token-Count": "3",
+    }
+
+
 def test_redactor_sanitizes_camel_case_credentials_without_removing_adjacent_fields():
     redactor = TraceRedactor(fingerprint_key=b"test-key")
 
@@ -133,6 +147,26 @@ def test_redactor_sanitizes_camel_case_credentials_without_removing_adjacent_fie
         "apiKey": "[REDACTED]",
         "accessToken": "[REDACTED]",
         "tokenCount": 2,
+        "apiVersion": "v1",
+        "accessLevel": "read",
+    }
+
+
+def test_redactor_preserves_count_fields_adjacent_to_sensitive_names():
+    redactor = TraceRedactor(fingerprint_key=b"test-key")
+
+    assert redactor.redact_payload(
+        {
+            "apiKeyCount": 2,
+            "accessTokenCount": 3,
+            "tokenCount": 4,
+            "apiVersion": "v1",
+            "accessLevel": "read",
+        }
+    ) == {
+        "apiKeyCount": 2,
+        "accessTokenCount": 3,
+        "tokenCount": 4,
         "apiVersion": "v1",
         "accessLevel": "read",
     }
@@ -155,6 +189,22 @@ def test_redactor_sanitizes_api_key_and_access_token_split_across_nested_paths()
             "access": {"token": "[REDACTED]"},
         },
         "metrics": {"token": {"count": 2}},
+    }
+
+
+def test_redactor_requires_complete_terminal_segments_for_split_sensitive_paths():
+    redactor = TraceRedactor(fingerprint_key=b"test-key")
+
+    assert redactor.redact_payload(
+        {
+            "api": {"keyCount": 2},
+            "access": {"tokenCount": 3},
+            "metrics": {"token": {"count": 4}},
+        }
+    ) == {
+        "api": {"keyCount": 2},
+        "access": {"tokenCount": 3},
+        "metrics": {"token": {"count": 4}},
     }
 
 

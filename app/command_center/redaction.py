@@ -2,23 +2,37 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 
 _REDACTED = "[REDACTED]"
-_SENSITIVE_KEY_MARKERS = frozenset(
+_FIELD_BOUNDARY = re.compile(
+    r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|[^0-9A-Za-z]+"
+)
+_SENSITIVE_TERMINAL_SEQUENCES = frozenset(
     {
-        "accesstoken",
-        "apikey",
-        "authorization",
-        "captcha",
-        "cookie",
-        "filecontent",
-        "localstorage",
-        "password",
-        "xaccesstoken",
+        ("access", "token"),
+        ("api", "key"),
+        ("authorization",),
+        ("captcha",),
+        ("captcha", "code"),
+        ("cookie",),
+        ("cookie", "jar"),
+        ("file", "content"),
+        ("file", "content", "base64"),
+        ("file", "contents"),
+        ("local", "storage"),
+        ("local", "storage", "state"),
+        ("password",),
+        ("x", "access", "token"),
+        ("x", "access", "token", "value"),
+        ("x", "api", "key"),
     }
+)
+_SENSITIVE_FIELD_NAMES = frozenset(
+    "".join(sequence) for sequence in _SENSITIVE_TERMINAL_SEQUENCES
 )
 
 
@@ -26,9 +40,28 @@ def _normalized_key(value: str) -> str:
     return "".join(character for character in value.casefold() if character.isalnum())
 
 
-def _is_sensitive_path(path: tuple[str, ...]) -> bool:
-    normalized_path = "".join(path)
-    return any(marker in normalized_path for marker in _SENSITIVE_KEY_MARKERS)
+def _field_segments(value: str) -> tuple[str, ...]:
+    return tuple(
+        segment.casefold()
+        for segment in _FIELD_BOUNDARY.split(value)
+        if segment
+    )
+
+
+def _has_sensitive_terminal_sequence(segments: tuple[str, ...]) -> bool:
+    return any(
+        len(segments) >= len(sequence)
+        and segments[-len(sequence) :] == sequence
+        for sequence in _SENSITIVE_TERMINAL_SEQUENCES
+    )
+
+
+def _is_sensitive_path(path: tuple[str, ...], *, field_name: str) -> bool:
+    return (
+        path[-1] in _SENSITIVE_FIELD_NAMES
+        or _has_sensitive_terminal_sequence(_field_segments(field_name))
+        or _has_sensitive_terminal_sequence(path)
+    )
 
 
 class TraceRedactor:
@@ -80,7 +113,7 @@ class TraceRedactor:
                 raise TypeError("header names and values must be strings")
             self._validate_mapping_key(name)
             normalized_name = _normalized_key(name)
-            if _is_sensitive_path((normalized_name,)):
+            if _is_sensitive_path((normalized_name,), field_name=name):
                 continue
             sanitized[name] = value[: self._max_string_length]
         return sanitized
@@ -117,7 +150,7 @@ class TraceRedactor:
                 self._validate_mapping_key(key)
                 normalized = _normalized_key(key)
                 child_path = (*path, normalized)
-                if _is_sensitive_path(child_path):
+                if _is_sensitive_path(child_path, field_name=key):
                     result[key] = _REDACTED
                 elif self._path_is_sensitive(child_path, sensitive_paths):
                     result[key] = {"fingerprint": self._fingerprint_value(child)}
