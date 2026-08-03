@@ -3,7 +3,7 @@
   "name": "CommandCenter Recorder Shell",
   "version": "0.1.0",
   "description": "Test-only selected-tab UI recorder shell.",
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "debugger"],
   "host_permissions": ["http://yifeng.dtsum.com/*"],
   "background": { "service_worker": "background.mjs", "type": "module" },
   "action": { "default_popup": "popup.html" },
