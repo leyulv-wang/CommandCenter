@@ -15,6 +15,18 @@ test('password controls never carry values', () => {
   assert.equal(event.valueAfter, null);
 });
 
+test('file controls never carry values', () => {
+  const event = buildUIEvent({
+    actionType: 'input',
+    control: { type: 'file', label: '附件' },
+    valueBefore: '',
+    valueAfter: 'C:\\fakepath\\quote.pdf',
+  });
+
+  assert.equal(event.valueBefore, null);
+  assert.equal(event.valueAfter, null);
+});
+
 test('semantic control context is retained', () => {
   const event = buildUIEvent({
     actionType: 'input',

@@ -27,14 +27,14 @@ function sanitizeControl(control = {}) {
 
 export function buildUIEvent(input = {}) {
   const control = sanitizeControl(input.control);
-  const isPassword = control.type === 'password';
+  const isSensitive = control.type === 'password' || control.type === 'file';
 
   return {
     type: MESSAGE_TYPES.UI_EVENT,
     actionType: cleanText(input.actionType),
     control,
-    valueBefore: isPassword ? null : cleanText(input.valueBefore),
-    valueAfter: isPassword ? null : cleanText(input.valueAfter),
+    valueBefore: isSensitive ? null : cleanText(input.valueBefore),
+    valueAfter: isSensitive ? null : cleanText(input.valueAfter),
     timestamp: Number.isFinite(input.timestamp) ? input.timestamp : Date.now(),
   };
 }
