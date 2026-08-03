@@ -1,4 +1,154 @@
+import pytest
+
+from app.command_center.system_profiles import SystemProfile
 from app.command_center.tool_catalog import ToolCatalog
+
+
+def profile_for(
+    method: str,
+    path: str,
+    *,
+    side_effect: str,
+) -> SystemProfile:
+    return SystemProfile.model_validate(
+        {
+            "system_code": "yifeng_mes",
+            "display_name": "MES",
+            "allowed_hosts": ["mes.example.test"],
+            "openapi_url": "http://mes.example.test/v2/api-docs",
+            "base_url": "http://mes.example.test",
+            "api_path_prefix": "/jeecg-boot/",
+            "credential_header": "X-Access-Token",
+            "limits": {
+                "request_timeout_seconds": 10,
+                "max_response_bytes": 1_024,
+                "max_requests_per_minute": 30,
+            },
+            "value_capture_policy": "fingerprint_by_default",
+            "sensitive_field_patterns": ["token"],
+            "tool_permissions": [
+                {"method": method, "path": path, "side_effect": side_effect}
+            ],
+        }
+    )
+
+
+def test_swagger2_query_parameters_enter_allowlisted_tool():
+    profile = profile_for(
+        "GET", "/jeecg-boot/purchase/apply/list", side_effect="read"
+    )
+    document = {
+        "swagger": "2.0",
+        "paths": {
+            "/jeecg-boot/purchase/apply/list": {
+                "get": {
+                    "operationId": "listPurchaseApply",
+                    "summary": "采购申请-分页列表查询",
+                    "parameters": [
+                        {
+                            "name": "applyNo",
+                            "in": "query",
+                            "type": "string",
+                            "description": "申请单号",
+                        },
+                        {
+                            "name": "X-Tenant-Id",
+                            "in": "header",
+                            "type": "string",
+                            "required": True,
+                        },
+                    ],
+                }
+            },
+            "/jeecg-boot/purchase/apply/audit": {
+                "get": {"operationId": "auditPurchaseApply"}
+            },
+        },
+    }
+
+    catalog = ToolCatalog.from_system_profile(document, profile)
+    tool = catalog.get("yifeng_mes:listPurchaseApply")
+
+    assert tool.description == "采购申请-分页列表查询"
+    assert tool.side_effect == "read"
+    assert tool.query_parameters["applyNo"].type == "string"
+    assert {(parameter.name, parameter.location) for parameter in tool.parameters} == {
+        ("applyNo", "query"),
+        ("X-Tenant-Id", "header"),
+    }
+    assert tool.credential_header == "X-Access-Token"
+    with pytest.raises(KeyError):
+        catalog.get("yifeng_mes:auditPurchaseApply")
+
+
+def test_swagger2_permission_requires_exact_method_and_path():
+    profile = profile_for(
+        "POST", "/jeecg-boot/purchase/apply/list", side_effect="write"
+    )
+    document = {
+        "swagger": "2.0",
+        "paths": {
+            "/jeecg-boot/purchase/apply/list": {
+                "get": {"operationId": "listPurchaseApply"}
+            }
+        },
+    }
+
+    catalog = ToolCatalog.from_system_profile(document, profile)
+
+    with pytest.raises(KeyError):
+        catalog.get("yifeng_mes:listPurchaseApply")
+
+
+def test_swagger2_body_schema_and_path_parameter_are_preserved():
+    path = "/api/orders/{order_id}"
+    profile = profile_for("POST", path, side_effect="write")
+    document = {
+        "swagger": "2.0",
+        "consumes": ["application/json"],
+        "paths": {
+            path: {
+                "parameters": [
+                    {
+                        "name": "order_id",
+                        "in": "path",
+                        "type": "string",
+                        "required": True,
+                    }
+                ],
+                "post": {
+                    "operationId": "updateOrder",
+                    "description": "Update one order",
+                    "parameters": [
+                        {
+                            "name": "payload",
+                            "in": "body",
+                            "required": True,
+                            "schema": {
+                                "type": "object",
+                                "properties": {"status": {"type": "string"}},
+                            },
+                        }
+                    ],
+                },
+            }
+        },
+    }
+
+    tool = ToolCatalog.from_system_profile(document, profile).get(
+        "yifeng_mes:updateOrder"
+    )
+
+    assert tool.side_effect == "write"
+    assert tool.content_type == "application/json"
+    assert tool.body_schema == {
+        "type": "object",
+        "properties": {"status": {"type": "string"}},
+    }
+    assert {(parameter.name, parameter.location) for parameter in tool.parameters} == {
+        ("order_id", "path"),
+        ("payload", "body"),
+    }
 
 
 def test_catalog_matches_only_explicitly_allowlisted_operations():
