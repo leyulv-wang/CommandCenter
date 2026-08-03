@@ -3,7 +3,7 @@ from uuid import uuid4
 import httpx
 
 from app.command_center.schemas import ExecutionCommand
-from app.command_center.tool_catalog import ToolCatalog
+from app.command_center.tool_catalog import ToolCatalog, ToolDefinition
 from app.command_center.tool_executor import BindingResolver, ToolExecutor
 
 
@@ -142,3 +142,82 @@ def test_executor_describes_known_write_without_exposing_idempotency_key():
         },
     }
     assert "secret-idempotency-key" not in str(result.side_effect)
+
+
+def test_executor_sends_query_and_ephemeral_token_without_returning_secret():
+    observed = {}
+
+    def handler(request):
+        observed["query"] = dict(request.url.params)
+        observed["token"] = request.headers.get("X-Access-Token")
+        return httpx.Response(200, json={"result": {"records": []}})
+
+    catalog = ToolCatalog(
+        [
+            ToolDefinition(
+                tool_id="mes:listPurchaseApply",
+                system_code="mes",
+                operation_id="listPurchaseApply",
+                method="GET",
+                base_url="https://mes.test",
+                path_template="/api/apply/list",
+                content_type=None,
+                side_effect="read",
+                credential_header="X-Access-Token",
+            )
+        ]
+    )
+    command = ExecutionCommand(
+        run_id=uuid4(),
+        skill_id=uuid4(),
+        skill_version=1,
+        step_id="query",
+        tool_id="mes:listPurchaseApply",
+        arguments={"query": {"applyNo": "CGSQ001"}},
+        reason="查询采购申请",
+    )
+    result = ToolExecutor(
+        catalog,
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        credential_provider=lambda _: {"X-Access-Token": "private-secret"},
+    ).execute(command)
+
+    assert observed == {"query": {"applyNo": "CGSQ001"}, "token": "private-secret"}
+    assert result.side_effect == {"occurred": False}
+    assert result.retry_safe is True
+    assert "private-secret" not in result.model_dump_json()
+
+
+def test_allowlisted_get_declared_write_is_not_implicitly_safe():
+    catalog = ToolCatalog(
+        [
+            ToolDefinition(
+                tool_id="mes:audit",
+                system_code="mes",
+                operation_id="audit",
+                method="GET",
+                base_url="https://mes.test",
+                path_template="/api/audit",
+                content_type=None,
+                side_effect="write",
+            )
+        ]
+    )
+    command = ExecutionCommand(
+        run_id=uuid4(),
+        skill_id=uuid4(),
+        skill_version=1,
+        step_id="audit",
+        tool_id="mes:audit",
+        arguments={},
+        reason="审核",
+    )
+    result = ToolExecutor(
+        catalog,
+        httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
+        ),
+    ).execute(command)
+
+    assert result.side_effect["occurred"] is True
+    assert result.retry_safe is False
