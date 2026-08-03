@@ -38,15 +38,26 @@ class TraceRedactor:
         fingerprint_key: bytes,
         max_depth: int = 8,
         max_array_items: int = 100,
+        max_mapping_items: int = 100,
+        max_sensitive_paths: int = 100,
         max_string_length: int = 4_096,
     ) -> None:
         if not isinstance(fingerprint_key, bytes) or not fingerprint_key:
             raise ValueError("fingerprint_key must be non-empty bytes")
-        if max_depth < 0 or max_array_items < 0 or max_string_length < 0:
-            raise ValueError("redaction limits must be non-negative")
+        limits = (
+            max_depth,
+            max_array_items,
+            max_mapping_items,
+            max_sensitive_paths,
+            max_string_length,
+        )
+        if any(type(limit) is not int or limit <= 0 for limit in limits):
+            raise ValueError("redaction limits must be positive integers")
         self._fingerprint_key = fingerprint_key
         self._max_depth = max_depth
         self._max_array_items = max_array_items
+        self._max_mapping_items = max_mapping_items
+        self._max_sensitive_paths = max_sensitive_paths
         self._max_string_length = max_string_length
 
     def fingerprint(self, value: str) -> str:
@@ -60,6 +71,7 @@ class TraceRedactor:
         ).hexdigest()
 
     def redact_headers(self, headers: Mapping[str, str]) -> dict[str, str]:
+        self._validate_mapping_size(headers)
         sanitized: dict[str, str] = {}
         for name, value in headers.items():
             if not isinstance(name, str) or not isinstance(value, str):
@@ -92,6 +104,7 @@ class TraceRedactor:
             raise ValueError("payload exceeds configured maximum depth")
 
         if isinstance(value, Mapping):
+            self._validate_mapping_size(value)
             result: dict[Any, Any] = {}
             for key, child in value.items():
                 child_depth = depth + 1
@@ -143,6 +156,8 @@ class TraceRedactor:
         self,
         paths: set[str] | frozenset[str],
     ) -> frozenset[tuple[str, ...]]:
+        if len(paths) > self._max_sensitive_paths:
+            raise ValueError("sensitive paths exceed configured maximum items")
         normalized: set[tuple[str, ...]] = set()
         for path in paths:
             if not isinstance(path, str):
@@ -160,6 +175,10 @@ class TraceRedactor:
     def _validate_mapping_key(self, key: str) -> None:
         if len(key) > self._max_string_length:
             raise ValueError("mapping key exceeds configured maximum length")
+
+    def _validate_mapping_size(self, value: Mapping[Any, Any]) -> None:
+        if len(value) > self._max_mapping_items:
+            raise ValueError("mapping exceeds configured maximum items")
 
     def _validate_sensitive_path(self, path: str) -> None:
         if not path:

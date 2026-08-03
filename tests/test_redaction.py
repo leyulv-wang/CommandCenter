@@ -120,6 +120,33 @@ def test_redactor_applies_profile_limits_without_exposing_rejected_values():
     assert "never-log-me" not in str(error.value)
 
 
+def test_redactor_accepts_mapping_at_configured_item_limit():
+    redactor = TraceRedactor(fingerprint_key=b"test-key", max_mapping_items=2)
+
+    assert redactor.redact_payload({"a": 1, "b": 2}) == {"a": 1, "b": 2}
+    assert redactor.redact_headers({"A": "1", "B": "2"}) == {"A": "1", "B": "2"}
+
+
+def test_redactor_rejects_mapping_over_configured_item_limit():
+    redactor = TraceRedactor(fingerprint_key=b"test-key", max_mapping_items=1)
+
+    with pytest.raises(ValueError) as error:
+        redactor.redact_payload({"first": "private-one", "second": "private-two"})
+
+    assert str(error.value) == "mapping exceeds configured maximum items"
+
+
+def test_redactor_rejects_header_mapping_over_configured_item_limit():
+    redactor = TraceRedactor(fingerprint_key=b"test-key", max_mapping_items=1)
+
+    with pytest.raises(ValueError) as error:
+        redactor.redact_headers(
+            {"Authorization": "private-token", "Accept": "application/json"}
+        )
+
+    assert str(error.value) == "mapping exceeds configured maximum items"
+
+
 def test_redactor_rejects_oversized_mapping_keys_without_echoing_them():
     redactor = TraceRedactor(fingerprint_key=b"test-key", max_string_length=4)
     oversized_key = "private-key-name"
@@ -159,20 +186,66 @@ def test_redactor_rejects_oversized_sensitive_path_segments_without_echoing_them
     assert oversized_path not in str(error.value)
 
 
-@pytest.mark.parametrize(
-    ("max_depth", "deep_path"),
-    [(2, "one.two.three"), (0, "one")],
-)
-def test_redactor_rejects_sensitive_paths_deeper_than_profile_without_echoing_them(
-    max_depth,
-    deep_path,
-):
-    redactor = TraceRedactor(fingerprint_key=b"test-key", max_depth=max_depth)
+def test_redactor_rejects_sensitive_paths_deeper_than_profile_without_echoing_them():
+    redactor = TraceRedactor(fingerprint_key=b"test-key", max_depth=2)
+    deep_path = "one.two.three"
 
     with pytest.raises(ValueError) as error:
         redactor.redact_payload({}, sensitive_paths={deep_path})
 
     assert deep_path not in str(error.value)
+
+
+def test_redactor_accepts_sensitive_paths_at_configured_item_limit():
+    redactor = TraceRedactor(fingerprint_key=b"test-key", max_sensitive_paths=2)
+
+    assert redactor.redact_payload(
+        {"a": "one", "b": "two"},
+        sensitive_paths={"a", "b"},
+    ) == {
+        "a": {"fingerprint": redactor.fingerprint("one")},
+        "b": {"fingerprint": redactor.fingerprint("two")},
+    }
+
+
+def test_redactor_rejects_sensitive_paths_over_limit_before_normalizing_them():
+    redactor = TraceRedactor(
+        fingerprint_key=b"test-key",
+        max_sensitive_paths=1,
+        max_string_length=4,
+    )
+
+    with pytest.raises(ValueError) as error:
+        redactor.redact_payload(
+            {},
+            sensitive_paths={"a", "private-segment"},
+        )
+
+    assert str(error.value) == "sensitive paths exceed configured maximum items"
+
+
+@pytest.mark.parametrize(
+    "limit_name",
+    [
+        "max_depth",
+        "max_array_items",
+        "max_mapping_items",
+        "max_sensitive_paths",
+        "max_string_length",
+    ],
+)
+@pytest.mark.parametrize("invalid_value", [0, -1, True, "1"])
+def test_redactor_rejects_non_positive_or_non_integer_profile_limits(
+    limit_name,
+    invalid_value,
+):
+    with pytest.raises(ValueError) as error:
+        TraceRedactor(
+            fingerprint_key=b"test-key",
+            **{limit_name: invalid_value},
+        )
+
+    assert str(error.value) == "redaction limits must be positive integers"
 
 
 def test_fingerprint_is_stable_keyed_and_does_not_contain_plaintext():
