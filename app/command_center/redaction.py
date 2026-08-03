@@ -9,6 +9,8 @@ from typing import Any
 _REDACTED = "[REDACTED]"
 _SENSITIVE_KEY_MARKERS = frozenset(
     {
+        "accesstoken",
+        "apikey",
         "authorization",
         "captcha",
         "cookie",

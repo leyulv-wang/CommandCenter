@@ -102,6 +102,62 @@ def test_redactor_removes_all_sensitive_headers_case_insensitively():
     ) == {"Accept": "application/json"}
 
 
+def test_redactor_removes_generic_api_key_and_access_token_headers():
+    redactor = TraceRedactor(fingerprint_key=b"test-key")
+
+    assert redactor.redact_headers(
+        {
+            "X-API-Key": "private-key",
+            "Access-Token": "private-token",
+            "X-Token-Count": "2",
+            "Content-Type": "application/json",
+        }
+    ) == {
+        "X-Token-Count": "2",
+        "Content-Type": "application/json",
+    }
+
+
+def test_redactor_sanitizes_camel_case_credentials_without_removing_adjacent_fields():
+    redactor = TraceRedactor(fingerprint_key=b"test-key")
+
+    assert redactor.redact_payload(
+        {
+            "apiKey": "private-key",
+            "accessToken": "private-token",
+            "tokenCount": 2,
+            "apiVersion": "v1",
+            "accessLevel": "read",
+        }
+    ) == {
+        "apiKey": "[REDACTED]",
+        "accessToken": "[REDACTED]",
+        "tokenCount": 2,
+        "apiVersion": "v1",
+        "accessLevel": "read",
+    }
+
+
+def test_redactor_sanitizes_api_key_and_access_token_split_across_nested_paths():
+    redactor = TraceRedactor(fingerprint_key=b"test-key")
+
+    assert redactor.redact_payload(
+        {
+            "credentials": {
+                "api": {"key": "private-key"},
+                "access": {"token": "private-token"},
+            },
+            "metrics": {"token": {"count": 2}},
+        }
+    ) == {
+        "credentials": {
+            "api": {"key": "[REDACTED]"},
+            "access": {"token": "[REDACTED]"},
+        },
+        "metrics": {"token": {"count": 2}},
+    }
+
+
 def test_redactor_applies_profile_limits_without_exposing_rejected_values():
     redactor = TraceRedactor(
         fingerprint_key=b"test-key",
