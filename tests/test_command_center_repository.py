@@ -40,6 +40,20 @@ def test_published_skill_version_is_immutable(tmp_path):
         repository.save_candidate_skill(changed)
 
 
+def test_repository_retains_verified_candidate_outside_published_registry(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    skill = SkillDefinition.model_validate(valid_skill_payload())
+    repository.save_candidate_skill(skill)
+    for category in ("normal", "parameter_variation", "idempotency"):
+        repository.save_test_result(skill.skill_id, skill.version, category, "passed", {})
+
+    verified = repository.mark_verified_candidate(skill.skill_id, skill.version)
+
+    assert verified.status == "verified_candidate"
+    assert repository.list_published_skills() == []
+    assert repository.list_verified_candidates()[0].skill_id == skill.skill_id
+
+
 def test_repository_persists_recording_and_task_run_lifecycle(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
     recording_id = uuid4()

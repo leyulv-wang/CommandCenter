@@ -28,6 +28,7 @@ class LearningDependencies:
     agents: LearningAgents
     tester: SkillTester
     catalog: Any
+    publish_policy: Literal["auto_publish", "verified_candidate"] = "auto_publish"
 
 
 class LearningState(TypedDict, total=False):
@@ -196,6 +197,16 @@ def build_learning_graph(dependencies: LearningDependencies):
         published = dependencies.repository.publish_skill(skill.skill_id, skill.version)
         return {"candidate_skill": published, "final_status": "published"}
 
+    def retain_verified_candidate(state: LearningState) -> LearningState:
+        skill = state["candidate_skill"]
+        verified = dependencies.repository.mark_verified_candidate(
+            skill.skill_id, skill.version
+        )
+        return {
+            "candidate_skill": verified,
+            "final_status": "verified_candidate",
+        }
+
     graph = StateGraph(LearningState)
     graph.add_node("segment_trace", segment_trace)
     graph.add_node("attribute_apis", attribute_apis)
@@ -203,6 +214,7 @@ def build_learning_graph(dependencies: LearningDependencies):
     graph.add_node("compile_skill", compile_skill)
     graph.add_node("execute_tests", execute_tests)
     graph.add_node("publish_skill", publish)
+    graph.add_node("retain_verified_candidate", retain_verified_candidate)
     graph.add_edge(START, "segment_trace")
     graph.add_conditional_edges(
         "segment_trace",
@@ -222,8 +234,17 @@ def build_learning_graph(dependencies: LearningDependencies):
     graph.add_edge("compile_skill", "execute_tests")
     graph.add_conditional_edges(
         "execute_tests",
-        lambda state: state["final_status"],
-        {"ready_to_publish": "publish_skill", "rejected": END},
+        lambda state: (
+            "rejected"
+            if state["final_status"] == "rejected"
+            else dependencies.publish_policy
+        ),
+        {
+            "auto_publish": "publish_skill",
+            "verified_candidate": "retain_verified_candidate",
+            "rejected": END,
+        },
     )
     graph.add_edge("publish_skill", END)
+    graph.add_edge("retain_verified_candidate", END)
     return graph.compile()

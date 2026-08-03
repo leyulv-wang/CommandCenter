@@ -47,7 +47,8 @@ class FakeCommandCenterService:
     def get_recording(self, recording_id):
         return self.recording
 
-    def list_skills(self):
+    def list_skills(self, status="published"):
+        self.requested_skill_status = status
         return []
 
     def get_skill(self, skill_id):
@@ -149,3 +150,13 @@ def test_extension_api_separates_evidence_and_plaintext_credential():
     assert stopped.status_code == 200
     assert "raw-private-token" not in stopped.text
     assert "one-time-recording-token" not in stopped.text
+
+
+def test_verified_candidate_query_is_explicit_and_default_stays_published():
+    service = FakeCommandCenterService()
+    client = client_for(service)
+
+    assert client.get("/skills").status_code == 200
+    assert service.requested_skill_status == "published"
+    assert client.get("/skills?status=verified_candidate").status_code == 200
+    assert service.requested_skill_status == "verified_candidate"

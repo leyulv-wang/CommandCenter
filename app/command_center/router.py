@@ -133,8 +133,11 @@ def create_router(service_provider: Callable[[], Any]) -> APIRouter:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.get("/skills")
-    def list_skills(service: Any = Depends(service_provider)):
-        return service.list_skills()
+    def list_skills(
+        status: Literal["published", "verified_candidate"] = "published",
+        service: Any = Depends(service_provider),
+    ):
+        return service.list_skills(status=status)
 
     @router.get("/skills/{skill_id}")
     def get_skill(skill_id: UUID, service: Any = Depends(service_provider)):

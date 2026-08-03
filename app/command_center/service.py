@@ -168,10 +168,17 @@ class CommandCenterService:
     def get_recording(self, recording_id: UUID | str) -> dict[str, Any]:
         return self.repository.get_recording(UUID(str(recording_id)))
 
-    def list_skills(self) -> list[dict[str, Any]]:
+    def list_skills(
+        self, status: str = "published"
+    ) -> list[dict[str, Any]]:
+        skills = (
+            self.repository.list_verified_candidates()
+            if status == "verified_candidate"
+            else self.repository.list_published_skills()
+        )
         return [
             skill.model_dump(mode="json")
-            for skill in self.repository.list_published_skills()
+            for skill in skills
         ]
 
     def get_skill(self, skill_id: UUID | str) -> dict[str, Any]:

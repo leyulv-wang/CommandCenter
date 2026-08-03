@@ -114,6 +114,47 @@ class CommandCenterRepository:
             ).all()
             return [SkillDefinition.model_validate_json(row.payload_json) for row in rows]
 
+    def mark_verified_candidate(
+        self, skill_id: UUID, version: int
+    ) -> SkillDefinition:
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(SkillVersionRow).where(
+                    SkillVersionRow.skill_id == str(skill_id),
+                    SkillVersionRow.version == version,
+                )
+            )
+            if row is None:
+                raise KeyError(f"Skill not found: {skill_id}:{version}")
+            if row.status == "published":
+                raise ImmutableSkillError("published Skill versions are immutable")
+            results = session.scalars(
+                select(SkillTestRow).where(
+                    SkillTestRow.skill_id == str(skill_id),
+                    SkillTestRow.skill_version == version,
+                )
+            ).all()
+            passed = {result.category for result in results if result.status == "passed"}
+            if passed != self.REQUIRED_TESTS:
+                raise PublishGateError("all three required test categories must pass")
+            skill = SkillDefinition.model_validate_json(row.payload_json).model_copy(
+                update={"status": "verified_candidate", "published_at": None}
+            )
+            row.status = "verified_candidate"
+            row.published_at = None
+            row.payload_json = skill.model_dump_json()
+            session.commit()
+            return skill
+
+    def list_verified_candidates(self) -> list[SkillDefinition]:
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(SkillVersionRow).where(
+                    SkillVersionRow.status == "verified_candidate"
+                )
+            ).all()
+            return [SkillDefinition.model_validate_json(row.payload_json) for row in rows]
+
     def get_skill(self, skill_id: UUID) -> SkillDefinition:
         with self.session_factory() as session:
             row = session.scalar(

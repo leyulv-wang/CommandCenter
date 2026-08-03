@@ -181,3 +181,23 @@ def test_learning_graph_stops_on_inconclusive_field_mapping(tmp_path):
     assert result["final_status"] == "rejected"
     assert result["failure_reasons"] == ["字段对应关系证据不足"]
     assert agents.calls == ["segment_trace", "attribute_apis", "map_fields"]
+
+
+def test_real_system_policy_stops_after_readonly_tests_as_verified_candidate(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    dependencies = LearningDependencies(
+        repository=repository,
+        agents=FakeAgents(),
+        tester=FakeTester(),
+        catalog={"version": "test"},
+        publish_policy="verified_candidate",
+    )
+
+    result = build_learning_graph(dependencies).invoke(
+        {"recording_id": str(uuid4()), "trace": {"api_exchanges": []}}
+    )
+
+    assert result["final_status"] == "verified_candidate"
+    assert result["candidate_skill"].status == "verified_candidate"
+    assert repository.list_published_skills() == []
+    assert len(repository.list_verified_candidates()) == 1
