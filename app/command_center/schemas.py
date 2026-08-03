@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     StringConstraints,
     field_validator,
@@ -17,6 +18,104 @@ BindingExpression = Annotated[
     str,
     StringConstraints(pattern=r"^(task|steps|literal)\..+$"),
 ]
+
+
+class _EvidenceModel(BaseModel):
+    """Strict, already-redacted evidence accepted from a browser capture client."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ControlDescriptor(_EvidenceModel):
+    """Semantic control metadata; it deliberately excludes the entered value."""
+
+    role: str | None = None
+    label: str | None = None
+    accessible_name: str | None = None
+    input_type: str | None = None
+    selector_fingerprint: str
+    required: bool | None = None
+    enabled: bool | None = None
+
+
+class PageDescriptor(_EvidenceModel):
+    """A page identity without raw query values or browser storage."""
+
+    origin: str
+    path: str
+    title: str | None = None
+    query_parameter_names: list[str] = Field(default_factory=list)
+    fingerprint: str
+
+
+class PageMutationEvidence(_EvidenceModel):
+    mutation_id: UUID
+    client_sequence: int = Field(ge=1)
+    occurred_at: datetime
+    page: PageDescriptor
+    mutation_type: Literal[
+        "navigation", "route_change", "dom_change", "form_state_change"
+    ]
+    changed_control_fingerprints: list[str] = Field(default_factory=list)
+    before_fingerprint: str | None = None
+    after_fingerprint: str | None = None
+
+
+class RecordedBrowserEvent(_EvidenceModel):
+    event_id: UUID
+    client_sequence: int = Field(ge=1)
+    occurred_at: datetime
+    event_type: Literal["click", "input", "select", "submit", "navigation"]
+    page: PageDescriptor
+    control: ControlDescriptor | None = None
+    value_fingerprint: str | None = None
+    mutation_ids: list[UUID] = Field(default_factory=list)
+
+
+class RecordedNetworkExchange(_EvidenceModel):
+    exchange_id: UUID
+    client_sequence: int = Field(ge=1)
+    started_at: datetime
+    completed_at: datetime
+    method: str
+    path_template: str
+    query_parameter_names: list[str] = Field(default_factory=list)
+    request_fingerprint: str | None = None
+    response_status: int
+    response_fingerprint: str | None = None
+    endpoint_fingerprint: str | None = None
+
+    @model_validator(mode="after")
+    def require_ordered_timestamps(self) -> RecordedNetworkExchange:
+        if self.completed_at < self.started_at:
+            raise ValueError("network exchange completion must not precede start")
+        return self
+
+
+class ExtensionEventBatch(_EvidenceModel):
+    """One ordered, redacted extension upload for exactly one recording."""
+
+    recording_id: UUID
+    events: list[RecordedBrowserEvent | RecordedNetworkExchange] = Field(min_length=1)
+    page_mutations: list[PageMutationEvidence] = Field(default_factory=list)
+    redaction_summary: dict[str, int] = Field(default_factory=dict)
+
+    @field_validator("redaction_summary")
+    @classmethod
+    def require_non_negative_redaction_counts(
+        cls, value: dict[str, int]
+    ) -> dict[str, int]:
+        if any(count < 0 for count in value.values()):
+            raise ValueError("redaction counts must be non-negative")
+        return value
+
+    @model_validator(mode="after")
+    def require_monotonic_client_sequence(self) -> ExtensionEventBatch:
+        sequences = [event.client_sequence for event in self.events]
+        sequences.extend(mutation.client_sequence for mutation in self.page_mutations)
+        if len(sequences) != len(set(sequences)) or sequences != sorted(sequences):
+            raise ValueError("extension client sequences must be unique and monotonic")
+        return self
 
 
 class UIEvent(BaseModel):
@@ -55,6 +154,9 @@ class OperationTrace(BaseModel):
     ui_events: list[UIEvent] = Field(default_factory=list)
     api_exchanges: list[APIExchange] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
+    capture_source: Literal["playwright", "browser_extension"] = "playwright"
+    page_mutations: list[PageMutationEvidence] = Field(default_factory=list)
+    redaction_summary: dict[str, int] = Field(default_factory=dict)
 
 
 class InputBinding(BaseModel):
@@ -111,8 +213,10 @@ class SkillStep(BaseModel):
         value: dict[str, BindingExpression],
     ) -> dict[str, BindingExpression]:
         for target in value:
-            if not target.startswith(("body.", "path.")):
-                raise ValueError("tool binding target must start with body. or path.")
+            if not target.startswith(("body.", "path.", "query.")):
+                raise ValueError(
+                    "tool binding target must start with body., path., or query."
+                )
         return value
 
     @model_validator(mode="after")
@@ -134,7 +238,14 @@ class SkillDefinition(BaseModel):
     version: int = Field(ge=1)
     name: str
     description: str
-    status: Literal["candidate", "testing", "published", "rejected", "runtime_failed"]
+    status: Literal[
+        "candidate",
+        "testing",
+        "verified_candidate",
+        "published",
+        "rejected",
+        "runtime_failed",
+    ]
     trigger_examples: list[str]
     source_recording_id: UUID
     inputs: list[SkillInput]

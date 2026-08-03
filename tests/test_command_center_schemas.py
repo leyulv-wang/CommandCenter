@@ -1,11 +1,14 @@
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
+import app.command_center.schemas as schemas
 from app.command_center.schemas import (
     DemonstrationAnalysis,
     InputBinding,
+    OperationTrace,
     SkillDefinition,
 )
 
@@ -43,6 +46,42 @@ def valid_skill_payload() -> dict[str, object]:
     }
 
 
+def existing_trace_payload() -> dict[str, object]:
+    return {
+        "trace_id": str(uuid4()),
+        "recording_id": str(uuid4()),
+        "objective": "observe a configured workflow",
+        "source_task": {"object_id": "TASK-1"},
+        "started_at": datetime.now(UTC).isoformat(),
+        "ended_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def valid_extension_batch() -> dict[str, object]:
+    return {
+        "recording_id": str(uuid4()),
+        "events": [
+            {
+                "event_id": str(uuid4()),
+                "client_sequence": 1,
+                "occurred_at": datetime.now(UTC).isoformat(),
+                "event_type": "click",
+                "page": {
+                    "origin": "https://example.test",
+                    "path": "/orders",
+                    "title": "Orders",
+                    "fingerprint": "sha256:page",
+                },
+                "control": {
+                    "role": "button",
+                    "label": "Search",
+                    "selector_fingerprint": "sha256:control",
+                },
+            }
+        ],
+    }
+
+
 def test_skill_rejects_arbitrary_binding_code():
     payload = valid_skill_payload()
     payload["steps"][0]["input_bindings"]["item_name"] = "python:__import__('os')"
@@ -57,6 +96,52 @@ def test_write_step_requires_idempotency_template():
 
     with pytest.raises(ValidationError):
         SkillDefinition.model_validate(payload)
+
+
+def test_old_operation_trace_remains_valid():
+    trace = OperationTrace.model_validate(existing_trace_payload())
+
+    assert trace.capture_source == "playwright"
+    assert trace.page_mutations == []
+    assert trace.redaction_summary == {}
+
+
+def test_extension_batch_requires_one_recording_and_monotonic_client_sequence():
+    payload = valid_extension_batch()
+    payload["events"].append({**payload["events"][0], "event_id": str(uuid4())})
+
+    with pytest.raises(ValidationError):
+        schemas.ExtensionEventBatch.model_validate(payload)
+
+
+def test_extension_batch_preserves_only_redacted_semantic_evidence():
+    batch = schemas.ExtensionEventBatch.model_validate(valid_extension_batch())
+
+    assert batch.events[0].page.query_parameter_names == []
+    assert batch.events[0].value_fingerprint is None
+
+
+def test_extension_evidence_rejects_sensitive_raw_values():
+    payload = valid_extension_batch()
+    payload["events"][0]["network"] = {
+        "request": {"authorization": "Bearer raw-secret"}
+    }
+
+    with pytest.raises(ValidationError):
+        schemas.ExtensionEventBatch.model_validate(payload)
+
+
+def test_skill_step_accepts_query_binding():
+    payload = valid_skill_payload()
+    payload["steps"][0]["input_bindings"] = {
+        "query.apply_no": "literal.apply_no"
+    }
+
+    skill = SkillDefinition.model_validate(payload)
+
+    assert skill.steps[0].input_bindings == {
+        "query.apply_no": "literal.apply_no"
+    }
 
 
 def test_tool_binding_target_must_identify_path_or_body():
