@@ -1,0 +1,38 @@
+{
+  "system_code": "yifeng_mes",
+  "display_name": "益丰 MES",
+  "allowed_hosts": ["yifeng.dtsum.com"],
+  "openapi_url": "http://yifeng.dtsum.com/jeecg-boot/v2/api-docs",
+  "base_url": "http://yifeng.dtsum.com",
+  "api_path_prefix": "/jeecg-boot/",
+  "credential_header": "X-Access-Token",
+  "limits": {
+    "request_timeout_seconds": 10,
+    "max_response_bytes": 1048576,
+    "max_requests_per_minute": 30
+  },
+  "value_capture_policy": "fingerprint_by_default",
+  "sensitive_field_patterns": [
+    "(?i)password",
+    "(?i)token",
+    "(?i)authorization",
+    "(?i)cookie"
+  ],
+  "tool_permissions": [
+    {
+      "method": "GET",
+      "path": "/jeecg-boot/purchase/apply/list",
+      "side_effect": "read"
+    },
+    {
+      "method": "GET",
+      "path": "/jeecg-boot/purchase/apply/queryById",
+      "side_effect": "read"
+    },
+    {
+      "method": "GET",
+      "path": "/jeecg-boot/purchase/apply/queryPurchaseApplyDetailByMainId",
+      "side_effect": "read"
+    }
+  ]
+}
