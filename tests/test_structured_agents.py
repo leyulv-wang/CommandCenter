@@ -3,7 +3,12 @@ from uuid import uuid4
 
 from app.command_center.agents import AgentSuite
 from app.command_center.model import StructuredModel
-from app.command_center.schemas import DemonstrationAnalysis, TestPlan as SkillTestPlan
+from app.command_center.schemas import (
+    APIAttributionAnalysis,
+    DemonstrationAnalysis,
+    FieldMappingAnalysis,
+    TestPlan as SkillTestPlan,
+)
 from app.command_center.tool_catalog import ToolCatalog
 from tests.test_command_center_schemas import valid_skill_payload
 
@@ -233,3 +238,72 @@ def test_verifier_treats_declared_write_as_known_effect_not_unknown_effect():
     assert "occurred=true 表示已知写操作" in prompt
     assert "不能仅因发生写操作而判定为未知副作用" in prompt
     assert "执行前后状态" in prompt
+
+
+def test_api_attribution_and_query_field_mapping_are_structured():
+    exchange_id = uuid4()
+    ui_event_id = uuid4()
+    attribution = APIAttributionAnalysis.model_validate(
+        {
+            "segments": [
+                {
+                    "segment_id": "query_purchase",
+                    "primary_tool_ids": ["yifeng_mes:listPurchaseApply"],
+                    "primary_exchange_ids": [str(exchange_id)],
+                    "evidence_summary": "页面查询动作紧邻采购申请列表请求",
+                }
+            ],
+            "attributable": True,
+        }
+    )
+    mapping = FieldMappingAnalysis.model_validate(
+        {
+            "mappings": [
+                {
+                    "skill_input_name": "apply_no",
+                    "api_target": "query.applyNo",
+                    "source_ui_event_ids": [str(ui_event_id)],
+                    "source_exchange_ids": [str(exchange_id)],
+                    "transformation": "identity",
+                    "evidence_summary": "页面申请单号与请求 applyNo 相同",
+                }
+            ],
+            "uncertainties": [],
+            "compilable": True,
+        }
+    )
+
+    assert attribution.segments[0].primary_tool_ids == [
+        "yifeng_mes:listPurchaseApply"
+    ]
+    assert mapping.mappings[0].api_target == "query.applyNo"
+
+
+class SegmentationOnlyModel:
+    def generate(self, schema, system_prompt, payload):
+        return schema.model_validate(
+            {
+                "summary": "一个片段",
+                "segments": [
+                    {
+                        "segment_id": "segment_1",
+                        "sequence": 1,
+                        "classification": "business_action",
+                        "summary": "查询",
+                        "source_ui_event_ids": [str(uuid4())],
+                    }
+                ],
+                "conclusive": True,
+            }
+        )
+
+
+def test_segmentation_rejects_evidence_ids_missing_from_trace():
+    agents = AgentSuite(SegmentationOnlyModel())
+
+    try:
+        agents.segment_trace({"ui_events": [], "api_exchanges": []})
+    except ValueError as error:
+        assert "unknown UI event" in str(error)
+    else:
+        raise AssertionError("unknown evidence reference was accepted")

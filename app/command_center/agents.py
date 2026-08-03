@@ -4,10 +4,13 @@ from typing import Any
 
 from app.command_center.model import StructuredModel
 from app.command_center.schemas import (
+    APIAttributionAnalysis,
     DemonstrationAnalysis,
+    FieldMappingAnalysis,
     SkillDefinition,
     TaskMatchDecision,
     TestPlan,
+    TraceSegmentation,
     VerificationResult,
 )
 
@@ -46,29 +49,91 @@ class AgentSuite:
             {"trace": trace, "catalog": catalog},
         )
 
-    def compile_skill(
+    def segment_trace(self, trace: Any) -> TraceSegmentation:
+        result = self.model.generate(
+            TraceSegmentation,
+            (
+                "你是演示时序分段智能体。只依据已脱敏的 UI、页面变化和网络证据，"
+                "把连续操作划分为业务动作、辅助查询、验证查询、导航、静态或遥测流量"
+                "以及不确定片段。不要猜测不存在的证据；不确定时明确列入 uncertainties。"
+            ),
+            {"trace": trace},
+        )
+        _validate_segmentation_references(result, trace)
+        return result
+
+    def attribute_apis(
         self,
-        analysis: DemonstrationAnalysis,
+        segmentation: TraceSegmentation,
         trace: Any,
         catalog: Any,
-    ) -> SkillDefinition:
-        return self.model.generate(
-            SkillDefinition,
+    ) -> APIAttributionAnalysis:
+        result = self.model.generate(
+            APIAttributionAnalysis,
             (
-                "你是 Skill 编译智能体。V1 只把采购系统中“创建采购申请”业务动作"
-                "编译成单步骤 API-only Skill。把演示中的申请人、物品、数量和原因"
-                "抽象为 Skill 输入，步骤通过 literal.<输入名> 引用这些运行时输入。"
-                "只使用目录内 Tool；写步骤必须提供幂等模板；引用只能来自 task、steps、literal。"
-                "每个 input_bindings 的目标键必须写成 body.<字段> 或 path.<路径参数>；"
-                "跨步骤结果使用 steps.<步骤>.output.<响应路径>。"
-                "成功条件必须描述可复用的业务不变量，例如请求成功、创建的对象能在"
-                "最终状态中观察到且没有重复。不得把演示返回的业务对象 ID 或其他"
-                "单次运行值写成固定期望值；新执行产生的对象标识允许变化，应依据"
-                "本次步骤输出与最终状态之间的对应关系验证。"
-                f"{BINDING_PROTOCOL_PROMPT}"
+                "你是 API 归因智能体。结合时序片段与 Tool 目录，区分主业务 API、"
+                "辅助查询、验证查询、静态或遥测流量以及不确定候选。只能引用输入中"
+                "真实存在的片段、网络交换和 Tool；HTTP GET 本身不代表安全或业务主接口。"
             ),
-            {"analysis": analysis, "trace": trace, "catalog": catalog},
+            {"segmentation": segmentation, "trace": trace, "catalog": catalog},
         )
+        _validate_attribution_references(result, segmentation, trace, catalog)
+        return result
+
+    def map_fields(
+        self,
+        attribution: APIAttributionAnalysis,
+        trace: Any,
+        catalog: Any,
+    ) -> FieldMappingAnalysis:
+        result = self.model.generate(
+            FieldMappingAnalysis,
+            (
+                "你是字段映射智能体。根据已脱敏页面证据、请求参数名、值指纹及 API 归因，"
+                "把会随运行变化的业务输入映射到 query、path 或 body 目标。语义理解由你判断；"
+                "证据不足必须标记 uncertainty，不能用名称关键词硬猜。"
+                f"{DEMONSTRATION_LITERAL_PROMPT}"
+            ),
+            {"attribution": attribution, "trace": trace, "catalog": catalog},
+        )
+        _validate_mapping_references(result, attribution, trace, catalog)
+        return result
+
+    def compile_skill(self, mapping: Any, attribution: Any, trace: Any = None, catalog: Any = None) -> SkillDefinition:
+        legacy = catalog is None
+        if legacy:
+            analysis, legacy_trace, legacy_catalog = mapping, attribution, trace
+            payload = {"analysis": analysis, "trace": legacy_trace, "catalog": legacy_catalog}
+            prompt = (
+                "你是 Skill 编译智能体。根据演示分析编译可复用 Skill。只使用目录内 Tool；"
+                "写步骤必须提供幂等模板；引用只能来自 task、steps、literal。"
+                "每个 input_bindings 目标必须以 body.、path. 或 query. 开头。"
+                "成功条件必须描述可复用的业务不变量。不得把演示返回的业务对象 ID"
+                "或其他单次运行值写成固定期望值；新执行产生的对象标识允许变化。"
+                f"{BINDING_PROTOCOL_PROMPT}"
+            )
+        else:
+            payload = {
+                "mapping": mapping,
+                "attribution": attribution,
+                "trace": trace,
+                "catalog": catalog,
+            }
+            prompt = (
+                "你是通用 Skill 编译智能体。依据字段映射和 API 归因编译最小可复用 Skill。"
+                "只使用归因为主业务、辅助或验证用途且存在于目录中的 Tool；不要复制单次演示值。"
+                "输入绑定只使用 task、steps、literal 数据路径，目标以 body.、path. 或 query. 开头；"
+                "写操作必须提供幂等模板，成功条件必须是可复用业务不变量。"
+                f"{BINDING_PROTOCOL_PROMPT}"
+            )
+        skill = self.model.generate(
+            SkillDefinition,
+            prompt,
+            payload,
+        )
+        if not legacy:
+            _validate_skill_tool_references(skill, catalog)
+        return skill
 
     def design_tests(self, skill: SkillDefinition) -> TestPlan:
         return self.model.generate(
@@ -126,3 +191,129 @@ class AgentSuite:
                 "skills": skills,
             },
         )
+
+
+def _as_payload(value: Any) -> dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return value if isinstance(value, dict) else {}
+
+
+def _trace_ids(trace: Any, collection: str, identifier: str) -> set[str]:
+    payload = _as_payload(trace)
+    return {
+        str(item[identifier])
+        for item in payload.get(collection, [])
+        if isinstance(item, dict) and identifier in item
+    }
+
+
+def _catalog_tool_ids(catalog: Any) -> set[str]:
+    if hasattr(catalog, "to_agent_payload"):
+        payload = catalog.to_agent_payload()
+    else:
+        payload = catalog if isinstance(catalog, dict) else {}
+    return {
+        str(item["tool_id"])
+        for item in payload.get("tools", [])
+        if isinstance(item, dict) and item.get("tool_id")
+    }
+
+
+def _validate_known(references: list[Any], known: set[str], label: str) -> None:
+    unknown = {str(reference) for reference in references} - known
+    if unknown:
+        raise ValueError(f"agent analysis references unknown {label}")
+
+
+def _validate_segmentation_references(result: TraceSegmentation, trace: Any) -> None:
+    ui_ids = _trace_ids(trace, "ui_events", "event_id")
+    exchange_ids = _trace_ids(trace, "api_exchanges", "exchange_id")
+    mutation_ids = _trace_ids(trace, "page_mutations", "mutation_id")
+    segment_ids = [segment.segment_id for segment in result.segments]
+    if len(segment_ids) != len(set(segment_ids)):
+        raise ValueError("agent analysis contains duplicate segment identifiers")
+    for segment in result.segments:
+        _validate_known(segment.source_ui_event_ids, ui_ids, "UI event")
+        _validate_known(segment.source_exchange_ids, exchange_ids, "API exchange")
+        _validate_known(segment.source_mutation_ids, mutation_ids, "page mutation")
+    _validate_known(result.ignored_ui_event_ids, ui_ids, "UI event")
+    _validate_known(result.ignored_exchange_ids, exchange_ids, "API exchange")
+    _validate_uncertainties(result.uncertainties, ui_ids, exchange_ids)
+
+
+def _validate_attribution_references(
+    result: APIAttributionAnalysis,
+    segmentation: TraceSegmentation,
+    trace: Any,
+    catalog: Any,
+) -> None:
+    segment_ids = {segment.segment_id for segment in segmentation.segments}
+    ui_ids = _trace_ids(trace, "ui_events", "event_id")
+    exchange_ids = _trace_ids(trace, "api_exchanges", "exchange_id")
+    tool_ids = _catalog_tool_ids(catalog)
+    for segment in result.segments:
+        _validate_known([segment.segment_id], segment_ids, "segment")
+        _validate_known(
+            [
+                *segment.primary_tool_ids,
+                *segment.supporting_tool_ids,
+                *segment.verification_tool_ids,
+            ],
+            tool_ids,
+            "Tool",
+        )
+        _validate_known(
+            [
+                *segment.primary_exchange_ids,
+                *segment.supporting_exchange_ids,
+                *segment.verification_exchange_ids,
+                *segment.ignored_exchange_ids,
+                *segment.uncertain_exchange_ids,
+            ],
+            exchange_ids,
+            "API exchange",
+        )
+    _validate_uncertainties(result.uncertainties, ui_ids, exchange_ids)
+
+
+def _validate_mapping_references(
+    result: FieldMappingAnalysis,
+    attribution: APIAttributionAnalysis,
+    trace: Any,
+    catalog: Any,
+) -> None:
+    ui_ids = _trace_ids(trace, "ui_events", "event_id")
+    exchange_ids = _trace_ids(trace, "api_exchanges", "exchange_id")
+    attributed_tools = {
+        tool_id
+        for segment in attribution.segments
+        for tool_id in (
+            *segment.primary_tool_ids,
+            *segment.supporting_tool_ids,
+            *segment.verification_tool_ids,
+        )
+    }
+    _validate_known(list(attributed_tools), _catalog_tool_ids(catalog), "Tool")
+    for mapping in result.mappings:
+        _validate_known(mapping.source_ui_event_ids, ui_ids, "UI event")
+        _validate_known(mapping.source_exchange_ids, exchange_ids, "API exchange")
+    _validate_uncertainties(result.uncertainties, ui_ids, exchange_ids)
+
+
+def _validate_skill_tool_references(skill: SkillDefinition, catalog: Any) -> None:
+    _validate_known(
+        [step.tool_id for step in skill.steps],
+        _catalog_tool_ids(catalog),
+        "Tool",
+    )
+
+
+def _validate_uncertainties(
+    uncertainties: list[Any],
+    ui_ids: set[str],
+    exchange_ids: set[str],
+) -> None:
+    for uncertainty in uncertainties:
+        _validate_known(uncertainty.source_ui_event_ids, ui_ids, "UI event")
+        _validate_known(uncertainty.source_exchange_ids, exchange_ids, "API exchange")

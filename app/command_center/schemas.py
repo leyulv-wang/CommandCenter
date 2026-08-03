@@ -306,6 +306,75 @@ class DemonstrationAnalysis(BaseModel):
     compilable: bool
 
 
+class AnalysisUncertainty(BaseModel):
+    description: str = Field(min_length=1)
+    source_ui_event_ids: list[UUID] = Field(default_factory=list)
+    source_exchange_ids: list[UUID] = Field(default_factory=list)
+
+
+class TraceSegment(BaseModel):
+    segment_id: EvidenceIdentifier
+    sequence: int = Field(ge=1)
+    classification: Literal[
+        "business_action",
+        "supporting_lookup",
+        "verification_query",
+        "navigation",
+        "static_or_telemetry",
+        "uncertain",
+    ]
+    summary: str = Field(min_length=1)
+    source_ui_event_ids: list[UUID] = Field(default_factory=list)
+    source_exchange_ids: list[UUID] = Field(default_factory=list)
+    source_mutation_ids: list[UUID] = Field(default_factory=list)
+
+
+class TraceSegmentation(BaseModel):
+    summary: str = Field(min_length=1)
+    segments: list[TraceSegment]
+    ignored_ui_event_ids: list[UUID] = Field(default_factory=list)
+    ignored_exchange_ids: list[UUID] = Field(default_factory=list)
+    uncertainties: list[AnalysisUncertainty] = Field(default_factory=list)
+    conclusive: bool
+
+
+class APIAttributionSegment(BaseModel):
+    segment_id: EvidenceIdentifier
+    primary_tool_ids: list[str] = Field(default_factory=list)
+    supporting_tool_ids: list[str] = Field(default_factory=list)
+    verification_tool_ids: list[str] = Field(default_factory=list)
+    primary_exchange_ids: list[UUID] = Field(default_factory=list)
+    supporting_exchange_ids: list[UUID] = Field(default_factory=list)
+    verification_exchange_ids: list[UUID] = Field(default_factory=list)
+    ignored_exchange_ids: list[UUID] = Field(default_factory=list)
+    uncertain_exchange_ids: list[UUID] = Field(default_factory=list)
+    evidence_summary: str = Field(min_length=1)
+
+
+class APIAttributionAnalysis(BaseModel):
+    segments: list[APIAttributionSegment]
+    uncertainties: list[AnalysisUncertainty] = Field(default_factory=list)
+    attributable: bool
+
+
+class FieldMapping(BaseModel):
+    skill_input_name: EvidenceIdentifier
+    api_target: Annotated[
+        str,
+        StringConstraints(pattern=r"^(query|path|body)\.[A-Za-z][A-Za-z0-9_.-]*$"),
+    ]
+    source_ui_event_ids: list[UUID] = Field(default_factory=list)
+    source_exchange_ids: list[UUID] = Field(default_factory=list)
+    transformation: str = Field(min_length=1, max_length=128)
+    evidence_summary: str = Field(min_length=1)
+
+
+class FieldMappingAnalysis(BaseModel):
+    mappings: list[FieldMapping]
+    uncertainties: list[AnalysisUncertainty] = Field(default_factory=list)
+    compilable: bool
+
+
 class SkillInput(BaseModel):
     name: str
     type: Literal["string", "integer", "number", "boolean"]
