@@ -1,4 +1,5 @@
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -46,6 +47,7 @@ from app.forms.schemas import FormSubmission, FormTemplate
 app = FastAPI(title="Configurable Form Agent MVP")
 external_system_client = ExternalSystemClient()
 _command_center_service: CommandCenterService | None = None
+logger = logging.getLogger(__name__)
 
 
 class ProfileCatalogRegistry:
@@ -314,21 +316,29 @@ def build_command_center_components(
 
     base_urls = {"connected_system": "http://127.0.0.1:8101"}
     if local_catalog is None:
-        local_document = (
-            client.get(f"{base_urls['connected_system']}/openapi.json")
-            .raise_for_status()
-            .json()
-        )
-        local_catalog = ToolCatalog.from_openapi_documents(
-            {"connected_system": local_document},
-            base_urls,
-            {
-                (
-                    "connected_system",
-                    "create_purchase_request_api_purchase_requests_post",
-                )
-            },
-        )
+        try:
+            local_document = (
+                client.get(f"{base_urls['connected_system']}/openapi.json")
+                .raise_for_status()
+                .json()
+            )
+            local_catalog = ToolCatalog.from_openapi_documents(
+                {"connected_system": local_document},
+                base_urls,
+                {
+                    (
+                        "connected_system",
+                        "create_purchase_request_api_purchase_requests_post",
+                    )
+                },
+            )
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning(
+                "Local test system catalog is unavailable; "
+                "CommandCenter is starting in degraded mode: %s",
+                exc,
+            )
+            local_catalog = ToolCatalog([])
 
     local_runner = SkillRunner(ToolExecutor(local_catalog, client))
     if local_tester is None:

@@ -277,3 +277,21 @@ def test_record_query_generate_and_verify_candidate(tmp_path):
     assert len(repository.list_verified_candidates()) == 1
     assert components.credential_vault.headers_for(UUID(str(recording_id))) == {}
     assert sum(request.url.path.endswith("/list") for request in requests) == 4
+
+
+def test_local_test_system_outage_does_not_block_readonly_observer(tmp_path):
+    def unavailable_local_system(_request):
+        return httpx.Response(502, json={"detail": "test system unavailable"})
+
+    components = build_command_center_components(
+        client=httpx.Client(transport=httpx.MockTransport(unavailable_local_system)),
+        profiles={"yifeng_mes": mes_profile()},
+        repository=CommandCenterRepository(
+            f"sqlite:///{tmp_path / 'degraded-center.sqlite3'}"
+        ),
+        agents=ReadonlyAgents(),
+        local_tester=object(),
+        execution_graph=StubGraph(),
+    )
+
+    assert components.service.list_skills() == []
