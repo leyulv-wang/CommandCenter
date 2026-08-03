@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import pytest
 from pydantic import ValidationError
@@ -54,6 +55,10 @@ def test_yifeng_profile_only_allows_three_read_operations():
     }
     assert profile.permission_for("GET", "/jeecg-boot/purchase/apply/audit") is None
     assert profile.permission_for("POST", "/jeecg-boot/purchase/apply/add") is None
+    assert any(
+        re.search(pattern, "captchaCode")
+        for pattern in profile.sensitive_field_patterns
+    )
 
 
 def test_profile_rejects_wildcard_permissions():
@@ -61,6 +66,24 @@ def test_profile_rejects_wildcard_permissions():
     payload["tool_permissions"] = [
         {"method": "GET", "path": "/jeecg-boot/*", "side_effect": "read"}
     ]
+
+    with pytest.raises(ValidationError):
+        SystemProfile.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("request_timeout_seconds", 0),
+        ("max_response_bytes", -1),
+        ("max_requests_per_minute", "30"),
+    ],
+)
+def test_profile_rejects_non_positive_or_coerced_limits(
+    field_name: str, invalid_value: object
+):
+    payload = valid_profile_payload()
+    payload["limits"][field_name] = invalid_value
 
     with pytest.raises(ValidationError):
         SystemProfile.model_validate(payload)

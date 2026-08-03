@@ -15,6 +15,7 @@
   "sensitive_field_patterns": [
     "(?i)password",
     "(?i)token",
+    "(?i)captcha",
     "(?i)authorization",
     "(?i)cookie"
   ],

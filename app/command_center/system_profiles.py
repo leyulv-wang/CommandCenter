@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+
+
+PositiveBoundedInteger = Annotated[int, Field(strict=True, gt=0)]
 
 
 class ProfileLimits(BaseModel):
@@ -13,9 +16,9 @@ class ProfileLimits(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    request_timeout_seconds: int
-    max_response_bytes: int
-    max_requests_per_minute: int
+    request_timeout_seconds: PositiveBoundedInteger
+    max_response_bytes: PositiveBoundedInteger
+    max_requests_per_minute: PositiveBoundedInteger
 
 
 class ToolPermission(BaseModel):
