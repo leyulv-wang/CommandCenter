@@ -20,11 +20,15 @@ class CommandCenterService:
         recorder: Any,
         learning_graph: Any,
         execution_graph: Any,
+        extension_recorder: Any | None = None,
+        system_profiles: dict[str, Any] | None = None,
     ):
         self.repository = repository
         self.recorder = recorder
         self.learning_graph = learning_graph
         self.execution_graph = execution_graph
+        self.extension_recorder = extension_recorder
+        self.system_profiles = system_profiles or {}
 
     def create_recording(self, request: Any) -> dict[str, Any]:
         recording_id = uuid4()
@@ -34,6 +38,7 @@ class CommandCenterService:
             "objective": request.objective,
             "source_system": request.source_system,
             "source_task_id": request.source_task_id,
+            "capture_source": request.capture_source,
         }
         self.repository.save_recording(recording_id, payload)
         return payload
@@ -41,6 +46,8 @@ class CommandCenterService:
     async def start_recording(self, recording_id: UUID | str) -> dict[str, Any]:
         identifier = UUID(str(recording_id))
         recording = self.repository.get_recording(identifier)
+        if recording.get("capture_source") == "browser_extension":
+            raise ValueError("browser extension recordings use the extension start route")
         await self.recorder.start(
             identifier,
             recording["objective"],
@@ -57,6 +64,8 @@ class CommandCenterService:
     async def stop_recording(self, recording_id: UUID | str) -> dict[str, Any]:
         identifier = UUID(str(recording_id))
         recording = self.repository.get_recording(identifier)
+        if recording.get("capture_source") == "browser_extension":
+            raise ValueError("browser extension recordings use the extension stop route")
         trace = await self.recorder.stop(identifier)
         recording["status"] = "analyzing"
         recording["trace"] = trace.model_dump(mode="json")
@@ -95,6 +104,64 @@ class CommandCenterService:
         else:
             recording.pop("failure_stage", None)
             recording.pop("failure_reasons", None)
+        self.repository.save_recording(identifier, recording)
+        return recording
+
+    def start_extension_recording(self, recording_id: UUID | str) -> dict[str, Any]:
+        identifier = UUID(str(recording_id))
+        recording = self.repository.get_recording(identifier)
+        if recording.get("capture_source") != "browser_extension":
+            raise ValueError("recording capture source is not browser_extension")
+        if self.extension_recorder is None:
+            raise ValueError("browser extension recorder is not configured")
+        profile = self.system_profiles.get(str(recording["source_system"]))
+        if profile is None:
+            raise ValueError("recording system profile is not configured")
+        grant = self.extension_recorder.start(
+            identifier,
+            str(recording["objective"]),
+            {
+                "system_code": recording["source_system"],
+                "object_id": recording["source_task_id"],
+            },
+            profile,
+        )
+        recording["status"] = "recording"
+        self.repository.save_recording(identifier, recording)
+        return {**recording, "recording_token": grant.token}
+
+    def ingest_extension_events(self, recording_id: UUID | str, batch: Any, token: str) -> None:
+        identifier = UUID(str(recording_id))
+        self.repository.get_recording(identifier)
+        if self.extension_recorder is None:
+            raise ValueError("browser extension recorder is not configured")
+        self.extension_recorder.ingest(identifier, batch, token)
+
+    def put_extension_credential(
+        self,
+        recording_id: UUID | str,
+        name: str,
+        secret: Any,
+        token: str,
+    ) -> None:
+        identifier = UUID(str(recording_id))
+        self.repository.get_recording(identifier)
+        if self.extension_recorder is None:
+            raise ValueError("browser extension recorder is not configured")
+        self.extension_recorder.put_credential(identifier, name, secret, token)
+
+    def stop_extension_recording(
+        self,
+        recording_id: UUID | str,
+        token: str,
+    ) -> dict[str, Any]:
+        identifier = UUID(str(recording_id))
+        recording = self.repository.get_recording(identifier)
+        if self.extension_recorder is None:
+            raise ValueError("browser extension recorder is not configured")
+        trace = self.extension_recorder.stop(identifier, token)
+        recording["status"] = "recorded"
+        recording["trace"] = trace.model_dump(mode="json")
         self.repository.save_recording(identifier, recording)
         return recording
 

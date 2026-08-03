@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import FastAPI
@@ -24,6 +25,23 @@ class FakeCommandCenterService:
 
     async def stop_recording(self, recording_id):
         self.recording["status"] = "published"
+        return self.recording
+
+    def start_extension_recording(self, recording_id):
+        self.recording["status"] = "recording"
+        return {**self.recording, "recording_token": "one-time-recording-token"}
+
+    def ingest_extension_events(self, recording_id, batch, token):
+        assert token == "one-time-recording-token"
+        self.batch = batch
+
+    def put_extension_credential(self, recording_id, name, secret, token):
+        assert token == "one-time-recording-token"
+        self.credential_name = name
+
+    def stop_extension_recording(self, recording_id, token):
+        assert token == "one-time-recording-token"
+        self.recording["status"] = "recorded"
         return self.recording
 
     def get_recording(self, recording_id):
@@ -86,3 +104,48 @@ def test_task_run_accepts_natural_language_request():
     assert response.status_code == 201
     assert response.json()["status"] == "succeeded"
     assert response.json()["final_response"]["summary"] == "采购创建并回写完成"
+
+
+def test_extension_api_separates_evidence_and_plaintext_credential():
+    service = FakeCommandCenterService()
+    client = client_for(service)
+    started = client.post(f"/recordings/{service.recording_id}/extension/start")
+    token = started.json()["recording_token"]
+    headers = {"X-CommandCenter-Recording-Token": token}
+    fingerprint = "hmac-sha256:" + "a" * 64
+    events = client.post(
+        f"/recordings/{service.recording_id}/extension/events",
+        headers=headers,
+        json={
+            "batch_id": str(uuid4()),
+            "recording_id": str(service.recording_id),
+            "events": [
+                {
+                    "event_id": str(uuid4()),
+                    "client_sequence": 1,
+                    "occurred_at": datetime.now(UTC).isoformat(),
+                    "event_type": "click",
+                    "page": {
+                        "origin": "https://example.test",
+                        "path": "/orders",
+                        "fingerprint": fingerprint,
+                    },
+                }
+            ],
+        },
+    )
+    credential = client.put(
+        f"/recordings/{service.recording_id}/extension/credential",
+        headers=headers,
+        json={"name": "X-Access-Token", "secret": "raw-private-token"},
+    )
+    stopped = client.post(
+        f"/recordings/{service.recording_id}/extension/stop", headers=headers
+    )
+
+    assert started.status_code == 200
+    assert events.status_code == 202
+    assert credential.status_code == 202
+    assert stopped.status_code == 200
+    assert "raw-private-token" not in stopped.text
+    assert "one-time-recording-token" not in stopped.text

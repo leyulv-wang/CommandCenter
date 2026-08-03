@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 import re
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import (
     BaseModel,
@@ -219,6 +219,7 @@ class RedactionSummary(_EvidenceModel):
 class ExtensionEventBatch(_EvidenceModel):
     """One ordered, redacted extension upload for exactly one recording."""
 
+    batch_id: UUID = Field(default_factory=uuid4)
     recording_id: UUID
     events: list[RecordedBrowserEvent | RecordedNetworkExchange] = Field(min_length=1)
     page_mutations: list[PageMutationEvidence] = Field(default_factory=list)

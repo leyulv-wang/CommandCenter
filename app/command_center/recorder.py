@@ -8,7 +8,13 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from app.command_center.schemas import APIExchange, OperationTrace, UIEvent
+from app.command_center.schemas import (
+    APIExchange,
+    OperationTrace,
+    PageMutationEvidence,
+    RedactionSummary,
+    UIEvent,
+)
 from app.command_center.tool_catalog import ToolCatalog
 
 
@@ -21,14 +27,18 @@ class OperationTraceBuilder:
         source_task: dict[str, Any],
         catalog: ToolCatalog,
         started_at: datetime,
+        capture_source: str = "playwright",
     ):
         self.recording_id = recording_id
         self.objective = objective
         self.source_task = source_task
         self.catalog = catalog
         self.started_at = started_at
+        self.capture_source = capture_source
         self.ui_events: list[UIEvent] = []
         self.api_exchanges: list[APIExchange] = []
+        self.page_mutations: list[PageMutationEvidence] = []
+        self.redaction_summary = RedactionSummary()
         self.evidence_refs: list[str] = []
         self._sequence = 0
 
@@ -98,6 +108,9 @@ class OperationTraceBuilder:
             ui_events=self.ui_events,
             api_exchanges=self.api_exchanges,
             evidence_refs=self.evidence_refs,
+            capture_source=self.capture_source,
+            page_mutations=self.page_mutations,
+            redaction_summary=self.redaction_summary,
         )
 
 
