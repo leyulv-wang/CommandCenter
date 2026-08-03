@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "CommandCenter Recorder Shell",
+  "name": "CommandCenter 只读观察器",
   "version": "0.1.0",
-  "description": "Test-only selected-tab UI recorder shell.",
+  "description": "开发测试用的选中标签页只读观察器。",
   "permissions": ["activeTab", "debugger"],
   "host_permissions": [
     "http://yifeng.dtsum.com/*",

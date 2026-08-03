@@ -61,3 +61,11 @@ test('capture stops page observation before requesting learning analysis', async
   assert.ok(stopContent >= 0 && analyze > stopContent);
   assert.match(background, /await uploadPendingEvidence\(\);[\s\S]*await detachFromTab[\s\S]*recordingApi\.stop/);
 });
+
+test('popup explicitly identifies readonly mode before capture', async () => {
+  const popupHtml = await readFile(new URL('../popup.html', import.meta.url), 'utf8');
+  const popupModule = await readFile(new URL('../popup.mjs', import.meta.url), 'utf8');
+
+  assert.match(popupHtml, /只读模式：未录制/);
+  assert.match(popupModule, /只读模式：未录制/);
+});

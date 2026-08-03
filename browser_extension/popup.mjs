@@ -17,7 +17,7 @@ function render(status) {
         ? '只读 Skill 已验证，状态：verified_candidate'
         : status?.learningStatus
           ? `演示处理结果：${status.learningStatus}`
-          : '未录制';
+          : '只读模式：未录制';
   startButton.disabled = !selectedTabMatchesProfile || capturing;
   stopButton.disabled = !capturing;
 }
