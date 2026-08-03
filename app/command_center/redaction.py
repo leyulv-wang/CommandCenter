@@ -24,9 +24,9 @@ def _normalized_key(value: str) -> str:
     return "".join(character for character in value.casefold() if character.isalnum())
 
 
-def _is_sensitive_key(value: str) -> bool:
-    normalized = _normalized_key(value)
-    return any(marker in normalized for marker in _SENSITIVE_KEY_MARKERS)
+def _is_sensitive_path(path: tuple[str, ...]) -> bool:
+    normalized_path = "".join(path)
+    return any(marker in normalized_path for marker in _SENSITIVE_KEY_MARKERS)
 
 
 class TraceRedactor:
@@ -52,9 +52,10 @@ class TraceRedactor:
     def fingerprint(self, value: str) -> str:
         if not isinstance(value, str):
             raise TypeError("fingerprint value must be a string")
+        bounded_value = value[: self._max_string_length]
         return hmac.new(
             self._fingerprint_key,
-            value.encode("utf-8"),
+            bounded_value.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
 
@@ -63,7 +64,9 @@ class TraceRedactor:
         for name, value in headers.items():
             if not isinstance(name, str) or not isinstance(value, str):
                 raise TypeError("header names and values must be strings")
-            if _is_sensitive_key(name):
+            self._validate_mapping_key(name)
+            normalized_name = _normalized_key(name)
+            if _is_sensitive_path((normalized_name,)):
                 continue
             sanitized[name] = value[: self._max_string_length]
         return sanitized
@@ -91,9 +94,15 @@ class TraceRedactor:
         if isinstance(value, Mapping):
             result: dict[Any, Any] = {}
             for key, child in value.items():
-                normalized = _normalized_key(key) if isinstance(key, str) else ""
+                child_depth = depth + 1
+                if child_depth > self._max_depth:
+                    raise ValueError("payload exceeds configured maximum depth")
+                if not isinstance(key, str):
+                    raise TypeError("mapping keys must be strings")
+                self._validate_mapping_key(key)
+                normalized = _normalized_key(key)
                 child_path = (*path, normalized)
-                if isinstance(key, str) and _is_sensitive_key(key):
+                if _is_sensitive_path(child_path):
                     result[key] = _REDACTED
                 elif self._path_is_sensitive(child_path, sensitive_paths):
                     result[key] = {"fingerprint": self._fingerprint_value(child)}
@@ -130,14 +139,15 @@ class TraceRedactor:
             raise TypeError("fingerprinted payload values must be strings")
         return self.fingerprint(value)
 
-    @staticmethod
     def _normalize_sensitive_paths(
+        self,
         paths: set[str] | frozenset[str],
     ) -> frozenset[tuple[str, ...]]:
         normalized: set[tuple[str, ...]] = set()
         for path in paths:
             if not isinstance(path, str):
                 raise TypeError("sensitive paths must be strings")
+            self._validate_sensitive_path(path)
             parts = tuple(
                 normalized_part
                 for part in path.split(".")
@@ -146,6 +156,30 @@ class TraceRedactor:
             if parts:
                 normalized.add(parts)
         return frozenset(normalized)
+
+    def _validate_mapping_key(self, key: str) -> None:
+        if len(key) > self._max_string_length:
+            raise ValueError("mapping key exceeds configured maximum length")
+
+    def _validate_sensitive_path(self, path: str) -> None:
+        if not path:
+            return
+        segment_length = 0
+        segment_count = 1
+        if segment_count > self._max_depth:
+            raise ValueError("sensitive path exceeds configured maximum depth")
+        for character in path:
+            if character == ".":
+                segment_count += 1
+                segment_length = 0
+                if segment_count > self._max_depth:
+                    raise ValueError("sensitive path exceeds configured maximum depth")
+            else:
+                segment_length += 1
+                if segment_length > self._max_string_length:
+                    raise ValueError(
+                        "sensitive path segment exceeds configured maximum length"
+                    )
 
     @staticmethod
     def _path_is_sensitive(

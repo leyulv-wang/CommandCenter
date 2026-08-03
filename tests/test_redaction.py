@@ -72,6 +72,22 @@ def test_redactor_sanitizes_sensitive_key_variants():
     }
 
 
+def test_redactor_sanitizes_sensitive_keys_split_across_recursive_paths():
+    redactor = TraceRedactor(fingerprint_key=b"test-key")
+
+    assert redactor.redact_payload(
+        {
+            "x": {"access": {"token": "secret"}},
+            "local": {"storage": {"session": "secret"}},
+            "file": {"content": "secret"},
+        }
+    ) == {
+        "x": {"access": {"token": "[REDACTED]"}},
+        "local": {"storage": "[REDACTED]"},
+        "file": {"content": "[REDACTED]"},
+    }
+
+
 def test_redactor_removes_all_sensitive_headers_case_insensitively():
     redactor = TraceRedactor(fingerprint_key=b"test-key")
 
@@ -95,13 +111,68 @@ def test_redactor_applies_profile_limits_without_exposing_rejected_values():
     )
 
     assert redactor.redact_payload(
-        {"items": ["abcdef", "ghijkl", "discarded-secret"]}
-    ) == {"items": ["abcd", "ghij"]}
+        {"data": ["abcdef", "ghijkl", "discarded-secret"]}
+    ) == {"data": ["abcd", "ghij"]}
 
     with pytest.raises(ValueError) as error:
         redactor.redact_payload({"outer": {"inner": {"value": "never-log-me"}}})
 
     assert "never-log-me" not in str(error.value)
+
+
+def test_redactor_rejects_oversized_mapping_keys_without_echoing_them():
+    redactor = TraceRedactor(fingerprint_key=b"test-key", max_string_length=4)
+    oversized_key = "private-key-name"
+
+    with pytest.raises(ValueError) as error:
+        redactor.redact_payload({oversized_key: "value"})
+
+    assert oversized_key not in str(error.value)
+
+
+def test_redactor_rejects_non_string_mapping_keys_without_echoing_them():
+    redactor = TraceRedactor(fingerprint_key=b"test-key")
+
+    with pytest.raises(TypeError) as error:
+        redactor.redact_payload({42: "value"})
+
+    assert "42" not in str(error.value)
+
+
+def test_redactor_bounds_sensitive_value_before_hmac():
+    redactor = TraceRedactor(fingerprint_key=b"test-key", max_string_length=4)
+
+    assert redactor.redact_payload(
+        {"name": "sensitive-value"},
+        sensitive_paths={"name"},
+    ) == {"name": {"fingerprint": redactor.fingerprint("sens")}}
+    assert redactor.fingerprint("sensitive-value") == redactor.fingerprint("sens")
+
+
+def test_redactor_rejects_oversized_sensitive_path_segments_without_echoing_them():
+    redactor = TraceRedactor(fingerprint_key=b"test-key", max_string_length=4)
+    oversized_path = "root.private-segment"
+
+    with pytest.raises(ValueError) as error:
+        redactor.redact_payload({}, sensitive_paths={oversized_path})
+
+    assert oversized_path not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("max_depth", "deep_path"),
+    [(2, "one.two.three"), (0, "one")],
+)
+def test_redactor_rejects_sensitive_paths_deeper_than_profile_without_echoing_them(
+    max_depth,
+    deep_path,
+):
+    redactor = TraceRedactor(fingerprint_key=b"test-key", max_depth=max_depth)
+
+    with pytest.raises(ValueError) as error:
+        redactor.redact_payload({}, sensitive_paths={deep_path})
+
+    assert deep_path not in str(error.value)
 
 
 def test_fingerprint_is_stable_keyed_and_does_not_contain_plaintext():
