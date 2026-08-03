@@ -51,8 +51,9 @@ test('body fingerprints are keyed and stable without exposing the value', async 
   assert.equal(first.includes('private'), false);
 });
 
-function fakeAdapter() {
+function fakeAdapter(options = {}) {
   const calls = [];
+  let evidenceFailures = options.evidenceFailures ?? 0;
   return {
     calls,
     async attach(tabId) { calls.push(['attach', tabId]); },
@@ -60,9 +61,15 @@ function fakeAdapter() {
     async enableNetwork(tabId) { calls.push(['enable', tabId]); },
     async responseBody(tabId, requestId) {
       calls.push(['body', tabId, requestId]);
-      return '{"employee":"private"}';
+      return options.body ?? '{"employee":"private"}';
     },
-    async sendEvidence(batch) { calls.push(['evidence', batch]); },
+    async sendEvidence(batch) {
+      calls.push(['evidence', batch]);
+      if (evidenceFailures > 0) {
+        evidenceFailures--;
+        throw new Error('upload failed');
+      }
+    },
     async sendCredential(name, value) { calls.push(['credential', name, value]); },
   };
 }
@@ -195,4 +202,116 @@ test('observer never reads bodies for static, download, oversized, or foreign re
   }
 
   assert.deepEqual(adapter.calls.filter(([name]) => name === 'body'), []);
+});
+
+async function completeJsonExchange(observer, requestId, headers, encodedDataLength = 12) {
+  await observer.handleDebuggerEvent(7, 'Network.requestWillBeSent', {
+    requestId,
+    timestamp: 10,
+    type: 'XHR',
+    request: { method: 'GET', url: `http://yifeng.dtsum.com/api/${requestId}` },
+  });
+  await observer.handleDebuggerEvent(7, 'Network.responseReceived', {
+    requestId,
+    timestamp: 11,
+    type: 'XHR',
+    response: {
+      url: `http://yifeng.dtsum.com/api/${requestId}`,
+      status: 200,
+      mimeType: 'application/json',
+      headers,
+    },
+  });
+  await observer.handleDebuggerEvent(7, 'Network.loadingFinished', {
+    requestId,
+    timestamp: 12,
+    encodedDataLength,
+  });
+}
+
+test('observer requires one strict identity Content-Length before reading a JSON body', async () => {
+  const adapter = fakeAdapter({ body: '{"ok":true}' });
+  const observer = createNetworkObserver(adapter, {
+    allowedOrigin: 'http://yifeng.dtsum.com',
+    fingerprintKey: 'recording-key',
+    maxBodyBytes: 32,
+  });
+  await observer.attachToTab(7, 'http://yifeng.dtsum.com');
+
+  await completeJsonExchange(observer, 'missing', {});
+  await completeJsonExchange(observer, 'invalid', { 'content-length': '12x' });
+  await completeJsonExchange(observer, 'conflict', { 'Content-Length': '12', 'content-length': '13' });
+  await completeJsonExchange(observer, 'compressed', { 'content-length': '12', 'content-encoding': 'gzip' });
+  await completeJsonExchange(observer, 'chunked', { 'content-length': '12', 'transfer-encoding': 'chunked' });
+  await completeJsonExchange(observer, 'large', { 'content-length': '33' });
+  await completeJsonExchange(observer, 'eligible', { 'content-length': '11', 'content-encoding': 'identity' });
+  await observer.flushBatch();
+
+  assert.deepEqual(adapter.calls.filter(([name]) => name === 'body'), [['body', 7, 'eligible']]);
+  const evidence = adapter.calls.find(([name]) => name === 'evidence')[1];
+  assert.deepEqual(
+    evidence.map((event) => event.responseBodySkippedReason),
+    [
+      'missing_content_length',
+      'invalid_content_length',
+      'conflicting_content_length',
+      'encoded_response',
+      'transfer_encoded_response',
+      'content_length_exceeds_limit',
+      null,
+    ],
+  );
+});
+
+test('encodedDataLength is not used as the decoded response-body limit', async () => {
+  const adapter = fakeAdapter({ body: '{"ok":true}' });
+  const observer = createNetworkObserver(adapter, {
+    allowedOrigin: 'http://yifeng.dtsum.com',
+    fingerprintKey: 'recording-key',
+    maxBodyBytes: 32,
+  });
+  await observer.attachToTab(7, 'http://yifeng.dtsum.com');
+
+  await completeJsonExchange(observer, 'headers-overhead', { 'content-length': '11' }, 10_000);
+
+  assert.deepEqual(adapter.calls.filter(([name]) => name === 'body'), [['body', 7, 'headers-overhead']]);
+});
+
+test('observer drops a body fingerprint when the actual bytes exceed the declared safe size', async () => {
+  const adapter = fakeAdapter({ body: 'x'.repeat(100) });
+  const observer = createNetworkObserver(adapter, {
+    allowedOrigin: 'http://yifeng.dtsum.com',
+    fingerprintKey: 'recording-key',
+    maxBodyBytes: 32,
+  });
+  await observer.attachToTab(7, 'http://yifeng.dtsum.com');
+
+  await completeJsonExchange(observer, 'lied-about-size', { 'content-length': '4' });
+  await observer.flushBatch();
+
+  const event = adapter.calls.find(([name]) => name === 'evidence')[1][0];
+  assert.equal(event.responseFingerprint, null);
+  assert.equal(event.responseBodySkippedReason, 'actual_body_exceeds_limit');
+});
+
+test('failed upload clears the session so a new session cannot flush stale evidence', async () => {
+  const adapter = fakeAdapter({ body: '{"ok":true}', evidenceFailures: 1 });
+  const observer = createNetworkObserver(adapter, {
+    allowedOrigin: 'http://yifeng.dtsum.com',
+    fingerprintKey: 'recording-key',
+    maxBodyBytes: 32,
+  });
+  await observer.attachToTab(7, 'http://yifeng.dtsum.com');
+  await completeJsonExchange(observer, 'old-session', { 'content-length': '11' });
+
+  await assert.rejects(
+    observer.handleTabUpdated(7, 'http://evil.test/away'),
+    /upload failed/,
+  );
+  assert.equal(observer.status().bufferedEventCount, 0);
+  assert.equal(observer.status().attached, false);
+
+  await observer.attachToTab(7, 'http://yifeng.dtsum.com');
+  assert.deepEqual(await observer.flushBatch(), []);
+  assert.equal(adapter.calls.filter(([name]) => name === 'evidence').length, 1);
 });

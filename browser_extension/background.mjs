@@ -26,14 +26,28 @@ function headerValue(headers, wantedName) {
   return entry ? String(entry[1]) : null;
 }
 
-function responseBodyEligible(state, params, maxBodyBytes) {
-  if (!state?.response || STATIC_RESOURCE_TYPES.has(params.type ?? state.resourceType)) return false;
+function responseBodySkipReason(state, maxBodyBytes) {
+  if (!state?.response) return 'missing_response_metadata';
+  if (STATIC_RESOURCE_TYPES.has(state.resourceType)) return 'static_resource';
   const { response } = state;
-  if (response.origin !== state.origin || response.mimeType !== 'application/json') return false;
-  if (/\battachment\b/i.test(response.contentDisposition ?? '')) return false;
-  if (Number.isFinite(response.contentLength) && response.contentLength > maxBodyBytes) return false;
-  if (Number.isFinite(params.encodedDataLength) && params.encodedDataLength > maxBodyBytes) return false;
-  return true;
+  if (response.origin !== state.origin) return 'foreign_origin';
+  if (response.mimeType !== 'application/json') return 'non_json_response';
+  if (/\battachment\b/i.test(response.contentDisposition ?? '')) return 'download_response';
+  if (response.transferEncodings.some((value) => value.toLowerCase() !== 'identity')) {
+    return 'transfer_encoded_response';
+  }
+  if (response.contentEncodings.some((value) => value.toLowerCase() !== 'identity')) {
+    return 'encoded_response';
+  }
+  if (response.contentLengths.length === 0) return 'missing_content_length';
+  if (response.contentLengths.some((value) => !/^(0|[1-9]\d*)$/.test(value))) {
+    return 'invalid_content_length';
+  }
+  const lengths = response.contentLengths.map(Number);
+  if (lengths.some((value) => !Number.isSafeInteger(value))) return 'invalid_content_length';
+  if (new Set(lengths).size !== 1) return 'conflicting_content_length';
+  if (lengths[0] > maxBodyBytes) return 'content_length_exceeds_limit';
+  return null;
 }
 
 export function createNetworkObserver(adapter, options = {}) {
@@ -48,6 +62,12 @@ export function createNetworkObserver(adapter, options = {}) {
   let selected = null;
   let paused = false;
   let flushPromise = null;
+
+  function clearSessionState() {
+    requests.clear();
+    credentials.clear();
+    eventBuffer.splice(0);
+  }
 
   function currentStatus() {
     return {
@@ -64,11 +84,15 @@ export function createNetworkObserver(adapter, options = {}) {
       throw new Error('The selected tab must use the allowed origin.');
     }
     if (selected) await detachFromTab(selected.tabId);
+    clearSessionState();
     await adapter.attach(tabId);
     try {
       await adapter.enableNetwork(tabId);
     } catch (error) {
       await adapter.detach(tabId).catch(() => {});
+      clearSessionState();
+      selected = null;
+      paused = true;
       throw error;
     }
     selected = { tabId, origin };
@@ -80,13 +104,12 @@ export function createNetworkObserver(adapter, options = {}) {
     if (!selected || tabId !== selected.tabId) return currentStatus();
     const detachedTabId = selected.tabId;
     selected = null;
-    requests.clear();
-    credentials.clear();
     try {
       await adapter.detach(detachedTabId);
     } finally {
-      return currentStatus();
+      clearSessionState();
     }
+    return currentStatus();
   }
 
   async function flushBatch() {
@@ -94,9 +117,19 @@ export function createNetworkObserver(adapter, options = {}) {
     if (eventBuffer.length === 0) return [];
     const batch = eventBuffer.slice();
     flushPromise = (async () => {
-      await adapter.sendEvidence(batch);
-      eventBuffer.splice(0, batch.length);
-      return batch;
+      try {
+        await adapter.sendEvidence(batch);
+        eventBuffer.splice(0, batch.length);
+        return batch;
+      } catch (error) {
+        const attachedTabId = selected?.tabId;
+        selected = null;
+        paused = true;
+        clearSessionState();
+        if (Number.isInteger(attachedTabId)) await adapter.detach(attachedTabId).catch(() => {});
+        options.onPaused?.();
+        throw error;
+      }
     })();
     try {
       return await flushPromise;
@@ -172,7 +205,10 @@ export function createNetworkObserver(adapter, options = {}) {
       requests.delete(params.requestId);
       return;
     }
-    const contentLength = Number(headerValue(params.response?.headers, 'content-length'));
+    const headerEntries = Object.entries(params.response?.headers ?? {});
+    const valuesFor = (name) => headerEntries
+      .filter(([headerName]) => headerName.toLowerCase() === name)
+      .map(([, value]) => String(value));
     state.resourceType = params.type ?? state.resourceType;
     state.response = {
       origin: url.origin,
@@ -180,7 +216,9 @@ export function createNetworkObserver(adapter, options = {}) {
       receivedAt: Number.isFinite(params.timestamp) ? params.timestamp : null,
       mimeType: String(params.response?.mimeType ?? '').split(';', 1)[0].trim().toLowerCase(),
       contentDisposition: headerValue(params.response?.headers, 'content-disposition'),
-      contentLength: Number.isFinite(contentLength) && contentLength >= 0 ? contentLength : null,
+      contentLengths: valuesFor('content-length'),
+      contentEncodings: valuesFor('content-encoding'),
+      transferEncodings: valuesFor('transfer-encoding'),
     };
   }
 
@@ -189,10 +227,13 @@ export function createNetworkObserver(adapter, options = {}) {
     if (!state?.response) return;
     let responseFingerprint = null;
     let responseWasJson = false;
-    if (responseBodyEligible(state, params, maxBodyBytes)) {
+    let responseBodySkippedReason = responseBodySkipReason(state, maxBodyBytes);
+    if (!responseBodySkippedReason) {
       const rawBody = await adapter.responseBody(selected.tabId, params.requestId);
       const summary = summarizeBody(rawBody, maxBodyBytes);
-      if (!summary.truncated) {
+      if (summary.truncated) {
+        responseBodySkippedReason = 'actual_body_exceeds_limit';
+      } else {
         responseWasJson = summary.json;
         responseFingerprint = await hmacFingerprint(rawBody, fingerprintKey);
       }
@@ -213,6 +254,7 @@ export function createNetworkObserver(adapter, options = {}) {
       resourceType: state.resourceType,
       requestWasJson: state.requestWasJson,
       responseWasJson,
+      responseBodySkippedReason,
       requestFingerprint: state.requestFingerprint,
       responseFingerprint,
       endpointFingerprint: state.endpointFingerprint,
@@ -235,9 +277,10 @@ export function createNetworkObserver(adapter, options = {}) {
     try {
       await flushBatch();
     } finally {
-      await detachFromTab(tabId);
+      const stillSelected = selected?.tabId === tabId;
+      if (stillSelected) await detachFromTab(tabId);
       paused = true;
-      options.onPaused?.();
+      if (stillSelected) options.onPaused?.();
     }
     return currentStatus();
   }
@@ -253,8 +296,7 @@ export function createNetworkObserver(adapter, options = {}) {
     if (!selected || tabId !== selected.tabId) return currentStatus();
     selected = null;
     paused = true;
-    requests.clear();
-    credentials.clear();
+    clearSessionState();
     options.onPaused?.();
     return currentStatus();
   }
