@@ -205,6 +205,11 @@ class ExtensionRecorder:
         self.sessions.pop(recording_id, None)
         self.credential_vault.clear(recording_id)
 
+    def abort_authorized(self, recording_id: UUID, token: str) -> None:
+        self._authorized_session(recording_id, token)
+        self.sessions.pop(recording_id, None)
+        self.credential_vault.clear(recording_id)
+
     def _authorized_session(self, recording_id: UUID, token: str) -> _ExtensionSession:
         session = self.sessions.get(recording_id)
         if session is None or not isinstance(token, str) or not hmac.compare_digest(

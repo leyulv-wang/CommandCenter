@@ -190,3 +190,22 @@ def test_stop_clears_vault_even_when_trace_finalization_fails():
 
     assert target.credential_vault.headers_for(recording_id) == {}
     assert recording_id not in target.sessions
+
+
+def test_authorized_abort_rejects_bad_token_then_clears_session_and_credentials():
+    recording_id = uuid4()
+    target = recorder()
+    grant = target.start(recording_id, "查询", {}, profile())
+    target.put_credential(
+        recording_id, "X-Access-Token", SecretStr("private"), grant.token
+    )
+
+    with pytest.raises(PermissionError):
+        target.abort_authorized(recording_id, "wrong-token")
+
+    assert recording_id in target.sessions
+
+    target.abort_authorized(recording_id, grant.token)
+
+    assert recording_id not in target.sessions
+    assert target.credential_vault.headers_for(recording_id) == {}

@@ -35,6 +35,14 @@ class FakeCommandCenterService:
         assert token == "one-time-recording-token"
         self.batch = batch
 
+    def fail_extension_recording(self, recording_id, token, issues):
+        if token != "one-time-recording-token":
+            raise PermissionError("extension recording authorization failed")
+        self.recording["status"] = "upload_failed"
+        self.recording["failure_stage"] = "upload"
+        self.recording["validation_issues"] = issues
+        return self.recording
+
     def put_extension_credential(self, recording_id, name, secret, token):
         assert token == "one-time-recording-token"
         self.credential_name = name
@@ -160,3 +168,51 @@ def test_verified_candidate_query_is_explicit_and_default_stays_published():
     assert service.requested_skill_status == "published"
     assert client.get("/skills?status=verified_candidate").status_code == 200
     assert service.requested_skill_status == "verified_candidate"
+
+
+def test_invalid_extension_evidence_becomes_safe_terminal_failure():
+    service = FakeCommandCenterService()
+    client = client_for(service)
+    client.post(f"/recordings/{service.recording_id}/extension/start")
+    response = client.post(
+        f"/recordings/{service.recording_id}/extension/events",
+        headers={"X-CommandCenter-Recording-Token": "one-time-recording-token"},
+        json={
+            "batch_id": str(uuid4()),
+            "recording_id": str(service.recording_id),
+            "events": [
+                {
+                    "exchange_id": str(uuid4()),
+                    "client_sequence": 1,
+                    "started_at": datetime.now(UTC).isoformat(),
+                    "completed_at": datetime.now(UTC).isoformat(),
+                    "method": "GET",
+                    "path_template": "/api/orders",
+                    "query_parameter_names": ["_t"],
+                    "response_status": 200,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_extension_evidence"
+    assert detail["issues"]
+    assert all(set(issue) == {"location", "type"} for issue in detail["issues"])
+    assert '"_t"' not in response.text
+    assert '"input"' not in response.text
+    assert service.recording["status"] == "upload_failed"
+
+
+def test_invalid_extension_evidence_cannot_change_state_with_bad_token():
+    service = FakeCommandCenterService()
+    service.recording["status"] = "recording"
+    response = client_for(service).post(
+        f"/recordings/{service.recording_id}/extension/events",
+        headers={"X-CommandCenter-Recording-Token": "wrong-token"},
+        json={"recording_id": str(service.recording_id), "events": []},
+    )
+
+    assert response.status_code == 401
+    assert service.recording["status"] == "recording"

@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any, Callable, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
-from pydantic import BaseModel, Field, SecretStr
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
+from pydantic import BaseModel, Field, SecretStr, ValidationError
 
 from app.command_center.schemas import EvidenceIdentifier, ExtensionEventBatch
 
@@ -27,6 +27,20 @@ class CreateTaskRunRequest(BaseModel):
 
 class SelectObjectRequest(BaseModel):
     object_id: str
+
+
+def _safe_validation_issues(error: ValidationError) -> list[dict[str, str]]:
+    return [
+        {
+            "location": ".".join(str(part) for part in issue["loc"]),
+            "type": str(issue["type"]),
+        }
+        for issue in error.errors(
+            include_url=False,
+            include_context=False,
+            include_input=False,
+        )
+    ]
 
 
 def create_router(service_provider: Callable[[], Any]) -> APIRouter:
@@ -64,10 +78,36 @@ def create_router(service_provider: Callable[[], Any]) -> APIRouter:
     @router.post("/recordings/{recording_id}/extension/events", status_code=202)
     def ingest_extension_events(
         recording_id: UUID,
-        batch: ExtensionEventBatch,
+        payload: dict[str, Any] = Body(),
         recording_token: str = Header(alias="X-CommandCenter-Recording-Token"),
         service: Any = Depends(service_provider),
     ):
+        try:
+            batch = ExtensionEventBatch.model_validate(payload)
+        except ValidationError as exc:
+            issues = _safe_validation_issues(exc)
+            try:
+                service.fail_extension_recording(
+                    recording_id,
+                    recording_token,
+                    issues,
+                )
+            except PermissionError as auth_exc:
+                raise HTTPException(
+                    status_code=401,
+                    detail="recording authorization failed",
+                ) from auth_exc
+            except KeyError as missing_exc:
+                raise HTTPException(status_code=404, detail="recording not found") from missing_exc
+            except ValueError as state_exc:
+                raise HTTPException(status_code=409, detail=str(state_exc)) from state_exc
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "invalid_extension_evidence",
+                    "issues": issues,
+                },
+            ) from exc
         try:
             service.ingest_extension_events(recording_id, batch, recording_token)
             return {"accepted": True}

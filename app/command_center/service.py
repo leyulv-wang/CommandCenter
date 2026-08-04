@@ -141,6 +141,31 @@ class CommandCenterService:
         validated = ExtensionEventBatch.model_validate(batch)
         self.extension_recorder.ingest(identifier, validated, token)
 
+    def fail_extension_recording(
+        self,
+        recording_id: UUID | str,
+        token: str,
+        issues: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        identifier = UUID(str(recording_id))
+        recording = self.repository.get_recording(identifier)
+        if self.extension_recorder is None:
+            raise ValueError("browser extension recorder is not configured")
+        self.extension_recorder.abort_authorized(identifier, token)
+        recording["status"] = "upload_failed"
+        recording["failure_stage"] = "upload"
+        recording["failure_reasons"] = [
+            "浏览器录制证据未通过协议校验，请重新加载扩展后再录制。"
+        ]
+        recording["validation_issues"] = issues
+        self.repository.save_recording(identifier, recording)
+        logger.warning(
+            "Extension evidence validation failed for recording %s: %s",
+            identifier,
+            issues,
+        )
+        return recording
+
     def put_extension_credential(
         self,
         recording_id: UUID | str,

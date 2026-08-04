@@ -42,6 +42,16 @@ class FailingGraph:
         raise RuntimeError("secret provider detail")
 
 
+class AbortableExtension:
+    def __init__(self):
+        self.aborted = None
+
+    def abort_authorized(self, recording_id, token):
+        if token != "valid-token":
+            raise PermissionError("extension recording authorization failed")
+        self.aborted = recording_id
+
+
 def test_service_connects_recording_stop_to_learning_graph(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
     recorder = Recorder()
@@ -159,6 +169,40 @@ def test_service_persists_natural_language_task_run(tmp_path):
     assert repository.get_task_run(run["run_id"])["final_response"]["summary"] == (
         "采购创建并回写完成"
     )
+
+
+def test_service_persists_safe_extension_upload_failure(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    extension = AbortableExtension()
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+        extension_recorder=extension,
+    )
+    created = service.create_recording(
+        CreateRecordingRequest(
+            objective="查询订单",
+            source_system="mes",
+            source_task_id="manual-demo",
+            capture_source="browser_extension",
+        )
+    )
+    recording = repository.get_recording(created["recording_id"])
+    recording["status"] = "recording"
+    repository.save_recording(created["recording_id"], recording)
+    issues = [{"location": "events.0.query_parameter_names.0", "type": "string_pattern_mismatch"}]
+
+    failed = service.fail_extension_recording(
+        created["recording_id"], "valid-token", issues
+    )
+
+    assert failed["status"] == "upload_failed"
+    assert failed["failure_stage"] == "upload"
+    assert failed["validation_issues"] == issues
+    assert extension.aborted is not None
+    assert repository.get_recording(created["recording_id"]) == failed
 
 
 def test_service_extension_recording_never_persists_token_or_credential(tmp_path):
