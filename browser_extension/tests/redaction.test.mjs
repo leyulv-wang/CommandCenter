@@ -33,6 +33,17 @@ test('URLs retain only origin, path, and query parameter names', () => {
   );
 });
 
+test('URLs drop query parameter names that the evidence protocol cannot represent', () => {
+  assert.deepEqual(
+    sanitizeUrl('http://yifeng.dtsum.com/api/list?_t=123&pageNo=2&bad%5Bname%5D=x'),
+    {
+      origin: 'http://yifeng.dtsum.com',
+      path: '/api/list',
+      queryParameterNames: ['pageNo'],
+    },
+  );
+});
+
 test('response summaries obey the byte limit without retaining raw bodies', () => {
   const result = summarizeBody('x'.repeat(100), 16);
 

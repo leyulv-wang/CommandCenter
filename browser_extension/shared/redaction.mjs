@@ -37,10 +37,11 @@ export function sanitizeUrl(value) {
   const url = new URL(value);
   const queryParameterNames = [];
   const seen = new Set();
-  for (const name of url.searchParams.keys()) {
-    if (!seen.has(name)) {
+  for (const rawName of url.searchParams.keys()) {
+    const name = rawName.slice(0, 128);
+    if (/^[A-Za-z][A-Za-z0-9_.-]*$/.test(name) && !seen.has(name)) {
       seen.add(name);
-      queryParameterNames.push(name.slice(0, 128));
+      queryParameterNames.push(name);
     }
   }
   return { origin: url.origin, path: url.pathname || '/', queryParameterNames };
