@@ -124,6 +124,26 @@ export interface RecordingView {
   learning_result?: Record<string, unknown>
 }
 
+export type ExtensionRecordingStatus =
+  | 'created'
+  | 'recording'
+  | 'upload_failed'
+  | 'analyzing'
+  | 'verified_candidate'
+  | 'rejected'
+  | 'recorded'
+
+export interface RecordingSummary {
+  recording_id: string
+  status: ExtensionRecordingStatus
+  objective: string
+  source_system: string
+  capture_source: 'browser_extension' | 'playwright'
+  created_at?: string | null
+  updated_at?: string | null
+  failure_reasons: string[]
+}
+
 export interface TaskRunView {
   run_id: string
   user_request: string

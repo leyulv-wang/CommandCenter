@@ -55,14 +55,33 @@
         <div v-if="errorMessage" class="error-note">{{ errorMessage }}</div>
       </section>
     </div>
+
+    <el-card class="extension-result" shadow="never">
+      <div class="result-header">
+        <h3>浏览器扩展录制结果</h3>
+        <el-button :loading="extensionBusy" @click="loadExtensionRecording">刷新</el-button>
+      </div>
+      <div v-if="latestExtensionRecording" class="result-content">
+        <div>
+          <strong>{{ latestExtensionRecording.objective }}</strong>
+          <p>{{ latestExtensionRecording.source_system }} · {{ extensionUpdatedAt }}</p>
+        </div>
+        <el-tag :type="extensionStatusType">{{ extensionStatusLabel }}</el-tag>
+      </div>
+      <p v-else-if="!extensionError" class="empty-result">尚无浏览器扩展录制</p>
+      <p v-if="extensionError" class="extension-error">{{ extensionError }}</p>
+      <ul v-if="latestExtensionRecording?.failure_reasons.length" class="failure-reasons">
+        <li v-for="reason in latestExtensionRecording.failure_reasons" :key="reason">{{ reason }}</li>
+      </ul>
+    </el-card>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { createRecording, startRecording, stopRecording } from '../api/commandCenter'
-import type { RecordingFailureStage, RecordingStatus } from '../api/types'
+import { createRecording, listRecordings, startRecording, stopRecording } from '../api/commandCenter'
+import type { RecordingFailureStage, RecordingStatus, RecordingSummary } from '../api/types'
 
 const objective = ref('创建采购申请')
 const recordingId = ref('')
@@ -71,6 +90,9 @@ const busy = ref(false)
 const errorMessage = ref('')
 const failureStage = ref<RecordingFailureStage>()
 const failureReasons = ref<string[]>([])
+const latestExtensionRecording = ref<RecordingSummary>()
+const extensionBusy = ref(false)
+const extensionError = ref('')
 
 const processSteps = [
   { key: 'observe', mark: '01', label: '观察', help: '记录页面动作和真实 API' },
@@ -109,6 +131,25 @@ const operatorMessage = computed(() => {
     return '本次演示未能发布 Skill，请重新演示一次。'
   }
   return '在采购系统填写并提交一条采购申请。中控只记录本次主动开始和结束之间的操作。'
+})
+const extensionStatusLabel = computed(() => ({
+  created: '等待录制',
+  recording: '正在录制',
+  upload_failed: '上传失败',
+  analyzing: '智能体分析中',
+  verified_candidate: 'Skill 验证成功',
+  rejected: 'Skill 验证失败',
+  recorded: '录制完成',
+}[latestExtensionRecording.value?.status ?? 'created']))
+const extensionStatusType = computed(() => {
+  const status = latestExtensionRecording.value?.status
+  if (status === 'verified_candidate') return 'success'
+  if (status === 'upload_failed' || status === 'rejected') return 'danger'
+  return 'primary'
+})
+const extensionUpdatedAt = computed(() => {
+  const value = latestExtensionRecording.value?.updated_at
+  return value ? new Date(value).toLocaleString('zh-CN') : '时间未知'
 })
 
 function stepState(step: string) {
@@ -170,6 +211,21 @@ async function handleStop() {
     busy.value = false
   }
 }
+
+async function loadExtensionRecording() {
+  extensionBusy.value = true
+  extensionError.value = ''
+  try {
+    const recordings = await listRecordings(1)
+    latestExtensionRecording.value = recordings[0]
+  } catch (error) {
+    extensionError.value = error instanceof Error ? error.message : '读取录制结果失败'
+  } finally {
+    extensionBusy.value = false
+  }
+}
+
+onMounted(loadExtensionRecording)
 </script>
 
 <style scoped>
@@ -193,6 +249,12 @@ async function handleStop() {
 .failure-reasons { color: #9f1239; line-height: 1.7; margin: 14px 0 0; padding-left: 20px; }
 .operator-label { color: var(--process) !important; font: 700 12px Bahnschrift, sans-serif; letter-spacing: .12em; text-transform: uppercase; }
 .error-note { background: #fff1f2; border: 1px solid #fecdd3; color: #be123c; margin-top: 18px; padding: 12px; }
+.extension-result { margin-top: 20px; }
+.result-header, .result-content { align-items: center; display: flex; justify-content: space-between; }
+.result-header { margin-bottom: 16px; }
+.result-header h3 { margin: 0; }
+.result-content p, .empty-result { color: #64748b; margin: 6px 0 0; }
+.extension-error { color: #be123c; margin: 0; }
 @media (max-width: 900px) {
   .process-rail { grid-template-columns: 1fr 1fr; row-gap: 18px; }
   .workbench-grid { grid-template-columns: 1fr; }

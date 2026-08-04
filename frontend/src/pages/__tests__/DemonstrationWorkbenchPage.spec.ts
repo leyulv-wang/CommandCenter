@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createRecording,
+  listRecordings,
   startRecording,
   stopRecording,
 } from '../../api/commandCenter'
@@ -10,6 +11,7 @@ import DemonstrationWorkbenchPage from '../DemonstrationWorkbenchPage.vue'
 
 vi.mock('../../api/commandCenter', () => ({
   createRecording: vi.fn(),
+  listRecordings: vi.fn(),
   startRecording: vi.fn(),
   stopRecording: vi.fn(),
 }))
@@ -42,6 +44,7 @@ async function finishDemonstration(result: Record<string, unknown>) {
 describe('DemonstrationWorkbenchPage', () => {
   beforeEach(() => {
     vi.resetAllMocks()
+    vi.mocked(listRecordings).mockResolvedValue([])
   })
 
   it('presents the employee demonstration sequence and explicit controls', () => {
@@ -96,5 +99,36 @@ describe('DemonstrationWorkbenchPage', () => {
     expect(wrapper.text()).toContain('参数变化测试未通过')
     const testingStep = wrapper.findAll('li').find((item) => item.text().includes('测试'))
     expect(testingStep?.classes()).toContain('active')
+  })
+
+  it.each([
+    ['recording', '正在录制'],
+    ['upload_failed', '上传失败'],
+    ['analyzing', '智能体分析中'],
+    ['verified_candidate', 'Skill 验证成功'],
+    ['rejected', 'Skill 验证失败'],
+  ] as const)('shows browser extension status %s as %s', async (status, label) => {
+    vi.mocked(listRecordings).mockResolvedValue([
+      {
+        recording_id: 'extension-recording-1',
+        status,
+        objective: '查询采购申请',
+        source_system: 'yifeng_mes',
+        capture_source: 'browser_extension',
+        created_at: '2026-08-04T08:00:00+00:00',
+        updated_at: '2026-08-04T08:01:00+00:00',
+        failure_reasons: status === 'upload_failed' ? ['证据协议校验失败'] : [],
+      },
+    ])
+
+    const wrapper = shallowMount(DemonstrationWorkbenchPage)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('浏览器扩展录制结果')
+    expect(wrapper.text()).toContain(label)
+    expect(wrapper.text()).toContain('查询采购申请')
+    if (status === 'upload_failed') {
+      expect(wrapper.text()).toContain('证据协议校验失败')
+    }
   })
 })
