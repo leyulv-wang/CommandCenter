@@ -71,6 +71,10 @@ export function createRecordingApi(fetchImpl = fetch, baseUrl = COMMAND_CENTER_O
 
 const recordingApi = createRecordingApi();
 
+export function failedLearningResult(recordingId) {
+  return { recording_id: recordingId, status: 'upload_failed' };
+}
+
 function exactOrigin(value) {
   try {
     const url = new URL(value);
@@ -596,6 +600,9 @@ async function stopCapture(expectedCapture = capture) {
     await detachFromTab(expectedCapture.tabId).catch(() => {});
     result = await recordingApi.stop(expectedCapture);
     lastLearningResult = result;
+  } catch (error) {
+    lastLearningResult = failedLearningResult(expectedCapture.recordingId);
+    throw error;
   } finally {
     await detachFromTab(expectedCapture.tabId).catch(() => {});
     expectedCapture.recordingToken = null;

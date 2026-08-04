@@ -1,4 +1,4 @@
-import { MESSAGE_TYPES } from './shared/protocol.mjs';
+import { captureStatusText, MESSAGE_TYPES } from './shared/protocol.mjs';
 
 const PROFILE_ORIGIN = 'http://yifeng.dtsum.com';
 const hostText = document.querySelector('#tab-host');
@@ -9,15 +9,7 @@ let selectedTabMatchesProfile = false;
 
 function render(status) {
   const capturing = Boolean(status?.capturing);
-  statusText.textContent = status?.paused
-    ? '录制已暂停：所选标签页已离开允许的站点'
-    : capturing
-      ? `正在录制（${status.eventCount} 个待上传事件）`
-      : status?.learningStatus === 'verified_candidate'
-        ? '只读 Skill 已验证，状态：verified_candidate'
-        : status?.learningStatus
-          ? `演示处理结果：${status.learningStatus}`
-          : '只读模式：未录制';
+  statusText.textContent = captureStatusText(status);
   startButton.disabled = !selectedTabMatchesProfile || capturing;
   stopButton.disabled = !capturing;
 }

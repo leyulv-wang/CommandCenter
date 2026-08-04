@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { createRecordingApi } from '../background.mjs';
+import * as backgroundModule from '../background.mjs';
+import * as protocolModule from '../shared/protocol.mjs';
+
+const { createRecordingApi } = backgroundModule;
 
 
 test('backend lifecycle separates evidence, credential, and final analysis', async () => {
@@ -64,8 +67,18 @@ test('capture stops page observation before requesting learning analysis', async
 
 test('popup explicitly identifies readonly mode before capture', async () => {
   const popupHtml = await readFile(new URL('../popup.html', import.meta.url), 'utf8');
-  const popupModule = await readFile(new URL('../popup.mjs', import.meta.url), 'utf8');
 
   assert.match(popupHtml, /只读模式：未录制/);
-  assert.match(popupModule, /只读模式：未录制/);
+  assert.equal(protocolModule.captureStatusText({}), '只读模式：未录制');
+});
+
+test('failed upload retains a terminal result and explicit popup feedback', () => {
+  assert.deepEqual(
+    backgroundModule.failedLearningResult('recording-1'),
+    { recording_id: 'recording-1', status: 'upload_failed' },
+  );
+  assert.equal(
+    protocolModule.captureStatusText({ learningStatus: 'upload_failed' }),
+    '录制上传失败，请查看中控',
+  );
 });

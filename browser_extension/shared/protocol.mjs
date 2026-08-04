@@ -6,6 +6,19 @@ export const MESSAGE_TYPES = Object.freeze({
   STATUS: 'CC_STATUS',
 });
 
+export function captureStatusText(status = {}) {
+  if (status.paused) return '录制已暂停：所选标签页已离开允许的站点';
+  if (status.capturing) return `正在录制（${status.eventCount} 个待上传事件）`;
+  if (status.learningStatus === 'verified_candidate') {
+    return '只读 Skill 已验证，状态：verified_candidate';
+  }
+  if (status.learningStatus === 'upload_failed') {
+    return '录制上传失败，请查看中控';
+  }
+  if (status.learningStatus) return `演示处理结果：${status.learningStatus}`;
+  return '只读模式：未录制';
+}
+
 function cleanText(value) {
   return typeof value === 'string' ? value.trim().slice(0, 500) : null;
 }
