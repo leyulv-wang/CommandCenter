@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field, SecretStr, ValidationError
 
 from app.command_center.schemas import EvidenceIdentifier, ExtensionEventBatch
@@ -45,6 +45,17 @@ def _safe_validation_issues(error: ValidationError) -> list[dict[str, str]]:
 
 def create_router(service_provider: Callable[[], Any]) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/recordings")
+    def list_recordings(
+        capture_source: str | None = None,
+        limit: int = Query(default=10, ge=1, le=100),
+        service: Any = Depends(service_provider),
+    ):
+        return service.list_recordings(
+            capture_source=capture_source,
+            limit=limit,
+        )
 
     @router.post("/recordings", status_code=status.HTTP_201_CREATED)
     def create_recording(

@@ -55,6 +55,11 @@ class FakeCommandCenterService:
     def get_recording(self, recording_id):
         return self.recording
 
+    def list_recordings(self, capture_source=None, limit=10):
+        self.requested_recording_source = capture_source
+        self.requested_recording_limit = limit
+        return [self.recording]
+
     def list_skills(self, status="published"):
         self.requested_skill_status = status
         return []
@@ -216,3 +221,15 @@ def test_invalid_extension_evidence_cannot_change_state_with_bad_token():
 
     assert response.status_code == 401
     assert service.recording["status"] == "recording"
+
+
+def test_recent_recordings_endpoint_forwards_safe_filters():
+    service = FakeCommandCenterService()
+    response = client_for(service).get(
+        "/recordings?capture_source=browser_extension&limit=1"
+    )
+
+    assert response.status_code == 200
+    assert response.json()[0]["recording_id"] == str(service.recording_id)
+    assert service.requested_recording_source == "browser_extension"
+    assert service.requested_recording_limit == 1

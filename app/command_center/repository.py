@@ -185,6 +185,11 @@ class CommandCenterRepository:
             str(recording_id),
         )
 
+    def list_recordings(self) -> list[dict[str, object]]:
+        with self.session_factory() as session:
+            rows = session.scalars(select(RecordingRow)).all()
+            return [json.loads(row.payload_json) for row in rows]
+
     def save_task_run(self, run_id: UUID, payload: dict[str, object]) -> None:
         self._save_runtime_row(TaskRunRow, "run_id", str(run_id), payload)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -35,6 +36,7 @@ class CommandCenterService:
 
     def create_recording(self, request: Any) -> dict[str, Any]:
         recording_id = uuid4()
+        now = datetime.now(UTC).isoformat()
         payload = {
             "recording_id": str(recording_id),
             "status": "created",
@@ -42,6 +44,8 @@ class CommandCenterService:
             "source_system": request.source_system,
             "source_task_id": request.source_task_id,
             "capture_source": request.capture_source,
+            "created_at": now,
+            "updated_at": now,
         }
         self.repository.save_recording(recording_id, payload)
         return payload
@@ -61,7 +65,7 @@ class CommandCenterService:
             "http://127.0.0.1:8101",
         )
         recording["status"] = "recording"
-        self.repository.save_recording(identifier, recording)
+        self._save_recording(identifier, recording)
         return recording
 
     async def stop_recording(self, recording_id: UUID | str) -> dict[str, Any]:
@@ -72,7 +76,7 @@ class CommandCenterService:
         trace = await self.recorder.stop(identifier)
         recording["status"] = "analyzing"
         recording["trace"] = trace.model_dump(mode="json")
-        self.repository.save_recording(identifier, recording)
+        self._save_recording(identifier, recording)
         try:
             result = self.learning_graph.invoke(
                 {
@@ -107,7 +111,7 @@ class CommandCenterService:
         else:
             recording.pop("failure_stage", None)
             recording.pop("failure_reasons", None)
-        self.repository.save_recording(identifier, recording)
+        self._save_recording(identifier, recording)
         return recording
 
     def start_extension_recording(self, recording_id: UUID | str) -> dict[str, Any]:
@@ -130,7 +134,7 @@ class CommandCenterService:
             profile,
         )
         recording["status"] = "recording"
-        self.repository.save_recording(identifier, recording)
+        self._save_recording(identifier, recording)
         return {**recording, "recording_token": grant.token}
 
     def ingest_extension_events(self, recording_id: UUID | str, batch: Any, token: str) -> None:
@@ -158,7 +162,7 @@ class CommandCenterService:
             "浏览器录制证据未通过协议校验，请重新加载扩展后再录制。"
         ]
         recording["validation_issues"] = issues
-        self.repository.save_recording(identifier, recording)
+        self._save_recording(identifier, recording)
         logger.warning(
             "Extension evidence validation failed for recording %s: %s",
             identifier,
@@ -196,11 +200,11 @@ class CommandCenterService:
         recording["trace"] = trace.model_dump(mode="json")
         if self.learning_graph_factory is None:
             recording["status"] = "recorded"
-            self.repository.save_recording(identifier, recording)
+            self._save_recording(identifier, recording)
             self.extension_recorder.clear_credentials(identifier)
             return recording
         recording["status"] = "analyzing"
-        self.repository.save_recording(identifier, recording)
+        self._save_recording(identifier, recording)
         graph = self.learning_graph_factory(
             str(recording["source_system"]), identifier
         )
@@ -214,11 +218,58 @@ class CommandCenterService:
         recording["learning_result"] = jsonable_encoder(result)
         if result.get("failure_reasons"):
             recording["failure_reasons"] = result["failure_reasons"]
-        self.repository.save_recording(identifier, recording)
+        self._save_recording(identifier, recording)
         return recording
 
     def get_recording(self, recording_id: UUID | str) -> dict[str, Any]:
         return self.repository.get_recording(UUID(str(recording_id)))
+
+    def list_recordings(
+        self,
+        capture_source: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        bounded_limit = max(1, min(int(limit), 100))
+        recordings = self.repository.list_recordings()
+        if capture_source is not None:
+            recordings = [
+                recording
+                for recording in recordings
+                if recording.get("capture_source") == capture_source
+            ]
+        recordings.sort(
+            key=lambda recording: str(recording.get("created_at", "")),
+            reverse=True,
+        )
+        safe_fields = (
+            "recording_id",
+            "status",
+            "objective",
+            "source_system",
+            "capture_source",
+            "created_at",
+            "updated_at",
+            "failure_reasons",
+        )
+        return [
+            {
+                field: (
+                    recording.get(field, [])
+                    if field == "failure_reasons"
+                    else recording.get(field)
+                )
+                for field in safe_fields
+            }
+            for recording in recordings[:bounded_limit]
+        ]
+
+    def _save_recording(
+        self,
+        recording_id: UUID,
+        recording: dict[str, Any],
+    ) -> None:
+        recording["updated_at"] = datetime.now(UTC).isoformat()
+        self.repository.save_recording(recording_id, recording)
 
     def list_skills(
         self, status: str = "published"

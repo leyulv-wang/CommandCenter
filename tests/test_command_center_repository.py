@@ -86,3 +86,22 @@ def test_repository_persists_recording_and_task_run_lifecycle(tmp_path):
 
     assert repository.get_recording(recording_id)["status"] == "published"
     assert repository.get_task_run(run_id)["status"] == "needs_object_selection"
+
+
+def test_repository_lists_recording_payloads(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    first = uuid4()
+    second = uuid4()
+    for recording_id, status in ((first, "recording"), (second, "upload_failed")):
+        repository.save_recording(
+            recording_id,
+            {
+                "recording_id": str(recording_id),
+                "status": status,
+                "objective": "查询订单",
+            },
+        )
+
+    listed = repository.list_recordings()
+
+    assert {item["recording_id"] for item in listed} == {str(first), str(second)}

@@ -205,6 +205,45 @@ def test_service_persists_safe_extension_upload_failure(tmp_path):
     assert repository.get_recording(created["recording_id"]) == failed
 
 
+def test_service_lists_only_safe_recent_recording_fields(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+    )
+    created = service.create_recording(
+        CreateRecordingRequest(
+            objective="查询订单",
+            source_system="mes",
+            source_task_id="manual-demo",
+            capture_source="browser_extension",
+        )
+    )
+    assert created["created_at"]
+    assert created["updated_at"]
+    stored = repository.get_recording(created["recording_id"])
+    stored["trace"] = {"secret_marker": "must-not-leak"}
+    stored["learning_result"] = {"private": "must-not-leak"}
+    repository.save_recording(created["recording_id"], stored)
+
+    listed = service.list_recordings(capture_source="browser_extension", limit=1)
+
+    assert len(listed) == 1
+    assert set(listed[0]) == {
+        "recording_id",
+        "status",
+        "objective",
+        "source_system",
+        "capture_source",
+        "created_at",
+        "updated_at",
+        "failure_reasons",
+    }
+    assert "must-not-leak" not in str(listed)
+
+
 def test_service_extension_recording_never_persists_token_or_credential(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
     profile = SystemProfile(
