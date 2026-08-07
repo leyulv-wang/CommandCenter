@@ -22,7 +22,7 @@ Crypto SubtleCrypto 可用；仅依赖页面注入的 `fetch`/XHR 包装也不�
 - Chrome MV3 生产构建通过，产物声明 `webRequest`，未声明 `debugger`。
 - 本地真实扩展端到端测试通过：采集 `GET /api/submissions`，完成 API Skill 学习与验证。
 - 端到端测试比较操作前后采购申请数据，确认只读录制和验证未产生写入。
-- 后端测试：242 个通过。
+- 后端测试：245 个通过。
 - 前端测试：14 个通过；生产构建通过。
 
 ## 查询参数指纹补充验证
@@ -33,6 +33,24 @@ Crypto SubtleCrypto 可用；仅依赖页面注入的 `fetch`/XHR 包装也不�
 - 字段映射提示要求智能体综合等值、语义、时序、归因和 Tool schema，不允许仅凭名称猜测。
 - API 学习已有结构化失败原因时，后续浏览器候选异常不会再把它覆盖成通用错误。
 - 重启后端加载新 schema 后，本地真实扩展只读 E2E 通过，采购数据前后未变化。
+
+## Skill 测试绑定与真实 MES 重新分析
+
+真实 MES 首次进入无害测试时，候选 Skill 使用
+`task.content.purchaseDepartment`，测试设计智能体未在 fixture 中提供对应字段，导致
+`BindingResolver` 抛出 `KeyError` 并使后台分析成为系统失败。
+
+修复后：
+
+- 测试设计智能体必须为 `task.*`、`literal.*` 和合法前序 `steps.*` 绑定提供完整上下文。
+- 只读测试器在调用 Tool 前预检外部绑定；绑定缺失返回结构化测试失败且不发送请求。
+- 重新分析会清除旧的 `failure_stage` 和 `failure_reasons`，不保留过期系统状态。
+- 已保存录制 `68f5c5bc-607e-47a5-9c91-3cae8df4f19f` 无需重新操作 MES 即可重新分析。
+- 重新分析已成功完成 Skill 编译并进入三类 Tool 测试；三个测试均因
+  `MissingCredential` 失败，而不是绑定异常或系统崩溃。
+
+下一项独立工作是为真实 MES 设计显式授权、仅驻留内存的临时凭证桥。现有隐私边界不允许
+扩展静默采集 `X-Access-Token`，因此未伪造测试通过结果，也未把浏览器登录凭证写入数据库。
 
 ## 待验收
 
