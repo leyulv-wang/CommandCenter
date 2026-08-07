@@ -97,6 +97,9 @@ class AgentSuite:
                 "你是字段映射智能体。根据已脱敏页面证据、请求参数名、值指纹及 API 归因，"
                 "把会随运行变化的业务输入映射到 query、path 或 body 目标。语义理解由你判断；"
                 "证据不足必须标记 uncertainty，不能用名称关键词硬猜。"
+                "页面 value_fingerprint 与 query_parameter_fingerprints 中的 HMAC 指纹相同只能证明值相等，"
+                "仍须结合控件语义、操作时序、API 归因和 Tool schema 判断业务含义；"
+                "不能只根据字段名称建立映射，指纹缺失或不相等时也不能猜测对应关系。"
                 f"{DEMONSTRATION_LITERAL_PROMPT}"
             ),
             {"attribution": attribution, "trace": trace, "catalog": catalog},

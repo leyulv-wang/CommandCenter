@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from datetime import UTC, datetime
 from typing import Any
@@ -19,6 +20,31 @@ _EXTENSION_ABORT_MESSAGES = {
     "no_uploadable_evidence": "浏览器未采集到可用证据，请重新录制。",
     "upload_failed": "浏览器录制证据上传失败，请稍后重试。",
 }
+_SENSITIVE_FAILURE_TEXT = re.compile(
+    r"authorization|cookie|credential|token|api\s*key|password|captcha|"
+    r"local.?storage|file.?content",
+    re.IGNORECASE,
+)
+
+
+def _safe_prior_analysis_reasons(recording: dict[str, Any]) -> list[str]:
+    result = recording.get("api_learning_result")
+    if not isinstance(result, dict):
+        return []
+    reasons = result.get("failure_reasons")
+    if not isinstance(reasons, list):
+        return []
+    safe: list[str] = []
+    for value in reasons:
+        if not isinstance(value, str):
+            continue
+        reason = value.strip()[:300]
+        if not reason or _SENSITIVE_FAILURE_TEXT.search(reason):
+            continue
+        safe.append(reason)
+        if len(safe) == 5:
+            break
+    return safe
 
 
 class CommandCenterService:
@@ -342,9 +368,9 @@ class CommandCenterService:
             recording["status"] = "needs_reteach"
             recording["analysis_stage"] = "failed"
             recording["failure_stage"] = "system"
-            recording["failure_reasons"] = [
-                "后台分析失败；录制证据已经保存，可以稍后重新分析。"
-            ]
+            recording["failure_reasons"] = _safe_prior_analysis_reasons(
+                recording
+            ) or ["后台分析失败；录制证据已经保存，可以稍后重新分析。"]
         finally:
             recording["analysis_finished_at"] = datetime.now(UTC).isoformat()
             self._save_recording(identifier, recording)

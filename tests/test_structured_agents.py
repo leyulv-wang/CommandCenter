@@ -279,6 +279,33 @@ def test_api_attribution_and_query_field_mapping_are_structured():
     assert mapping.mappings[0].api_target == "query.applyNo"
 
 
+class FieldMappingPromptModel:
+    def __init__(self):
+        self.prompt = ""
+
+    def generate(self, schema, system_prompt, payload):
+        self.prompt = system_prompt
+        return schema.model_validate(
+            {"mappings": [], "uncertainties": [], "compilable": True}
+        )
+
+
+def test_field_mapping_agent_uses_query_fingerprint_equality_without_name_guessing():
+    model = FieldMappingPromptModel()
+    AgentSuite(model).map_fields(
+        APIAttributionAnalysis.model_validate(
+            {"segments": [], "uncertainties": [], "attributable": True}
+        ),
+        {"ui_events": [], "api_exchanges": []},
+        {"tools": []},
+    )
+
+    assert "HMAC 指纹相同只能证明值相等" in model.prompt
+    assert "控件语义、操作时序" in model.prompt
+    assert "不能只根据字段名称" in model.prompt
+    assert "指纹缺失或不相等" in model.prompt
+
+
 class SegmentationOnlyModel:
     def generate(self, schema, system_prompt, payload):
         return schema.model_validate(

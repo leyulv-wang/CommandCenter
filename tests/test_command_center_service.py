@@ -9,7 +9,7 @@ from pydantic import SecretStr
 from app.command_center.repository import CommandCenterRepository
 from app.command_center.router import CreateRecordingRequest, CreateTaskRunRequest
 from app.command_center.schemas import OperationTrace
-from app.command_center.service import CommandCenterService
+from app.command_center.service import CommandCenterService, _safe_prior_analysis_reasons
 from app.command_center.extension_recorder import ExtensionRecorder
 from app.command_center.schemas import ExtensionEventBatch
 from app.command_center.system_profiles import ProfileLimits, SystemProfile, ToolPermission
@@ -53,6 +53,29 @@ class AbortableExtension:
         if token != "valid-token":
             raise PermissionError("extension recording authorization failed")
         self.aborted = recording_id
+
+
+def test_prior_analysis_reasons_are_bounded_and_filter_sensitive_text():
+    reasons = _safe_prior_analysis_reasons(
+        {
+            "api_learning_result": {
+                "failure_reasons": [
+                    "字段对应关系证据不足",
+                    "Authorization token leaked",
+                    "x" * 400,
+                    "原因四",
+                    "原因五",
+                    "原因六",
+                    "原因七",
+                ]
+            }
+        }
+    )
+
+    assert reasons[0] == "字段对应关系证据不足"
+    assert all("token" not in reason.lower() for reason in reasons)
+    assert len(reasons) == 5
+    assert max(map(len, reasons)) == 300
 
 
 def test_service_connects_recording_stop_to_learning_graph(tmp_path):
@@ -583,3 +606,62 @@ def test_api_rejection_is_preserved_when_browser_fallback_is_created(tmp_path):
 
     assert result["status"] == "browser_candidate"
     assert result["api_learning_result"] == api_rejection
+
+
+def test_api_rejection_reason_survives_crashed_browser_fallback(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+
+    class CrashingBrowserDistiller:
+        def compile_browser_skill(self, trace, allowed_origins):
+            raise RuntimeError("private model provider response")
+
+    class ClearableExtension:
+        def clear_credentials(self, recording_id):
+            pass
+
+    api_rejection = {
+        "final_status": "rejected",
+        "failure_stage": "analysis",
+        "failure_reasons": ["字段对应关系证据不足"],
+    }
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+        extension_recorder=ClearableExtension(),
+        learning_graph_factory=lambda _system_code, _recording_id: Graph(api_rejection),
+        browser_skill_distiller=CrashingBrowserDistiller(),
+    )
+    created = service.create_recording(
+        CreateRecordingRequest(
+            objective="查询订单",
+            source_system="mes",
+            source_task_id="manual-demo",
+            capture_source="browser_extension",
+        )
+    )
+    recording = repository.get_recording(created["recording_id"])
+    recording.update(
+        {
+            "status": "recorded",
+            "trace": {
+                "recording_id": created["recording_id"],
+                "ui_events": [
+                    {
+                        "event_id": str(uuid4()),
+                        "action_type": "click",
+                        "page_url": "https://mes.example.test/orders",
+                    }
+                ],
+                "api_exchanges": [{"exchange_id": str(uuid4())}],
+            },
+        }
+    )
+    repository.save_recording(created["recording_id"], recording)
+
+    result = service.analyze_extension_recording(created["recording_id"])
+
+    assert result["status"] == "needs_reteach"
+    assert result["failure_reasons"] == ["字段对应关系证据不足"]
+    assert "private model provider response" not in str(result)
