@@ -213,6 +213,7 @@ export type FrameMetadata = {
 
 export type NetworkRequestEvent = EventBase & {
   kind: 'network_request';
+  capture_channel?: 'browser_web_request';
   request_id: string;
   method: string;
   full_url: string;
@@ -224,6 +225,7 @@ export type NetworkRequestEvent = EventBase & {
 
 export type NetworkResponseEvent = EventBase & {
   kind: 'network_response';
+  capture_channel?: 'browser_web_request';
   request_id: string;
   status?: number;
   content_type?: string;
