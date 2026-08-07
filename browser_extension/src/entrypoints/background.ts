@@ -6,9 +6,13 @@ import {
   setRecordingLabel,
 } from '@/recording/recorder';
 import { commandCenterSession } from '@/command-center/session';
-import { profileById } from '@/command-center/config';
+import { originAllowed, profileById } from '@/command-center/config';
 import { connectRecordingTab } from '@/recording/tab-connection';
 import { latestCommandCenterRecording } from '@/recording/latest-command-center';
+import {
+  createWebRequestFallbackRecorder,
+  createWebRequestRecordingScope,
+} from '@/recording/web-request-fallback';
 import { errorMessage } from '@/shared/errors';
 import type { CapturedEvent, CaptureSettings, RecordingRow } from '@/shared/types';
 import { db, getConfig } from '@/storage/db';
@@ -36,6 +40,11 @@ let activeTraceRecovered = false;
 let recovery: Promise<void> | null = null;
 const CONTENT_FLUSH_TIMEOUT_MS = 1500;
 const tabUrlCache = new Map<number, string>();
+const webRequestScope = createWebRequestRecordingScope();
+const webRequestRecorder = createWebRequestFallbackRecorder({
+  getContext: webRequestScope.context,
+  sendEvent: (event) => appendEvent(event).catch(warnDroppedEvent('webRequest')),
+});
 const DEFAULT_CAPTURE_SETTINGS: CaptureSettings = {
   screenshots: false,
   video: false,
@@ -60,6 +69,44 @@ export default defineBackground(() => {
   browser.webNavigation.onCommitted.addListener((details) => {
     void handleNavigationCommitted(details);
   });
+  chrome.webRequest.onBeforeRequest.addListener(
+    (details) => {
+      void webRequestRecorder.beforeRequest({
+        requestId: details.requestId,
+        tabId: details.tabId,
+        method: details.method,
+        url: details.url,
+        ...(details.initiator ? { initiator: details.initiator } : {}),
+        timeStamp: details.timeStamp,
+        type: details.type,
+      });
+    },
+    { urls: ['<all_urls>'] },
+  );
+  chrome.webRequest.onCompleted.addListener(
+    (details) => {
+      void webRequestRecorder.completed({
+        requestId: details.requestId,
+        tabId: details.tabId,
+        url: details.url,
+        statusCode: details.statusCode,
+        timeStamp: details.timeStamp,
+      });
+    },
+    { urls: ['<all_urls>'] },
+  );
+  chrome.webRequest.onErrorOccurred.addListener(
+    (details) => {
+      void webRequestRecorder.failed({
+        requestId: details.requestId,
+        tabId: details.tabId,
+        url: details.url,
+        timeStamp: details.timeStamp,
+        error: details.error,
+      });
+    },
+    { urls: ['<all_urls>'] },
+  );
 
   const downloads = browser.downloads as unknown as typeof chrome.downloads | undefined;
   downloads?.onCreated?.addListener((item) => {
@@ -106,6 +153,8 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
         if (!failed) throw error;
         row = failed;
       } finally {
+        webRequestRecorder.clear(traceId);
+        webRequestScope.deactivate();
         if (activeTraceId === traceId) activeTraceId = null;
         activeTraceRecovered = false;
         await broadcastRecordingState(false, null, null, []);
@@ -162,6 +211,11 @@ async function beginRecording(
   });
   activeTraceId = row.trace_id;
   activeTraceRecovered = false;
+  webRequestRecorder.clear();
+  webRequestScope.activate(
+    activeTraceId,
+    row.command_center?.allowed_origins ?? [],
+  );
   const captureSettings = await captureSettingsForActiveRecording(activeTraceId, row);
   await broadcastRecordingState(
     true,
@@ -189,6 +243,22 @@ async function recoverActiveTraceId(): Promise<void> {
   const recoveredRow = active[0] ?? null;
   activeTraceId = recoveredRow?.trace_id ?? null;
   activeTraceRecovered = activeTraceId !== null;
+  webRequestRecorder.clear();
+  webRequestScope.deactivate();
+  if (activeTraceId && recoveredRow) {
+    const allowedOrigins = recoveredRow.command_center?.allowed_origins ?? [];
+    webRequestScope.activate(activeTraceId, allowedOrigins);
+    const tabs = await browser.tabs.query({ url: ['http://*/*', 'https://*/*'] });
+    for (const tab of tabs) {
+      if (
+        tab.id !== undefined &&
+        tab.url &&
+        originAllowed(tab.url, allowedOrigins)
+      ) {
+        webRequestScope.connectTab(tab.id);
+      }
+    }
+  }
 }
 
 async function ensureRecovered(): Promise<void> {
@@ -228,6 +298,10 @@ async function handleTabCreated(tab: { id?: number; url?: string; pendingUrl?: s
   if (shouldRecordBrowserNavigationUrl(url)) tabUrlCache.set(tab.id, url);
   await ensureRecovered();
   if (!activeTraceId || !shouldRecordBrowserNavigationUrl(url)) return;
+  const context = webRequestScope.context();
+  if (context && originAllowed(url, context.allowedOrigins)) {
+    webRequestScope.connectTab(tab.id);
+  }
   await appendNavigationEvent(
     tabNavigationEvent({
       traceId: activeTraceId,
@@ -247,11 +321,18 @@ async function handleTabUpdated(
 ): Promise<void> {
   const url = changeInfo.url ?? tab.url ?? tab.pendingUrl;
   if (shouldRecordBrowserNavigationUrl(url)) tabUrlCache.set(tabId, url);
+  const context = webRequestScope.context();
+  if (!context || !url || !originAllowed(url, context.allowedOrigins)) {
+    webRequestScope.disconnectTab(tabId);
+  } else {
+    webRequestScope.connectTab(tabId);
+  }
 }
 
 async function handleTabRemoved(tabId: number): Promise<void> {
   const url = tabUrlCache.get(tabId) ?? 'about:blank';
   tabUrlCache.delete(tabId);
+  webRequestScope.disconnectTab(tabId);
   await ensureRecovered();
   if (!activeTraceId || !shouldRecordBrowserNavigationUrl(url)) return;
   await appendNavigationEvent(
@@ -271,6 +352,12 @@ async function handleNavigationCommitted(details: { tabId: number; frameId: numb
   tabUrlCache.set(details.tabId, details.url);
   await ensureRecovered();
   if (!activeTraceId) return;
+  const context = webRequestScope.context();
+  if (context && originAllowed(details.url, context.allowedOrigins)) {
+    webRequestScope.connectTab(details.tabId);
+  } else {
+    webRequestScope.disconnectTab(details.tabId);
+  }
   await appendNavigationEvent(
     tabNavigationEvent({
       traceId: activeTraceId,
@@ -326,11 +413,14 @@ async function broadcastRecordingState(
     captureSettings: resolvedCaptureSettings,
     allowedOrigins,
   };
+  if (!active) {
+    webRequestScope.deactivate();
+  }
   await Promise.allSettled(
     tabs
       .filter((tab) => tab.id !== undefined && Boolean(tab.url))
-      .map((tab) =>
-        connectRecordingTab({
+      .map(async (tab) => {
+        const result = await connectRecordingTab({
           tabId: tab.id!,
           url: tab.url!,
           message,
@@ -341,8 +431,15 @@ async function broadcastRecordingState(
               target: { tabId, allFrames: true },
               files: ['content-scripts/content.js'],
             }),
-        })
-      )
+        });
+        if (
+          active &&
+          result !== 'skipped' &&
+          originAllowed(tab.url!, allowedOrigins)
+        ) {
+          webRequestScope.connectTab(tab.id!);
+        }
+      })
   );
 }
 

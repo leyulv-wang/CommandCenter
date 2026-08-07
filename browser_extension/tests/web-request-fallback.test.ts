@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createWebRequestFallbackRecorder,
+  createWebRequestRecordingScope,
   type WebRequestRecordingContext,
 } from '@/recording/web-request-fallback';
 import type { CapturedEvent } from '@/shared/types';
@@ -12,6 +13,23 @@ const context: WebRequestRecordingContext = {
 };
 
 describe('browser webRequest fallback recorder', () => {
+  it('tracks only tabs connected to the active recording lifecycle', () => {
+    const scope = createWebRequestRecordingScope();
+
+    expect(scope.context()).toBeNull();
+    scope.activate('tr_mes', ['http://yifeng.dtsum.com']);
+    scope.connectTab(7);
+    expect(scope.context()).toEqual({
+      traceId: 'tr_mes',
+      tabIds: new Set([7]),
+      allowedOrigins: ['http://yifeng.dtsum.com'],
+    });
+    scope.disconnectTab(7);
+    expect(scope.context()?.tabIds).toEqual(new Set());
+    expect(scope.deactivate()).toBe('tr_mes');
+    expect(scope.context()).toBeNull();
+  });
+
   it('records a minimal paired request and response for the active MES tab', async () => {
     const events: CapturedEvent[] = [];
     const recorder = createWebRequestFallbackRecorder({

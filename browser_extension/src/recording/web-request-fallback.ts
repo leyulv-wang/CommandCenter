@@ -12,6 +12,37 @@ export type WebRequestRecordingContext = {
   allowedOrigins: readonly string[];
 };
 
+export function createWebRequestRecordingScope() {
+  let traceId: string | null = null;
+  let allowedOrigins: readonly string[] = [];
+  const tabIds = new Set<number>();
+
+  return {
+    activate(nextTraceId: string, nextAllowedOrigins: readonly string[]) {
+      traceId = nextTraceId;
+      allowedOrigins = [...nextAllowedOrigins];
+      tabIds.clear();
+    },
+    connectTab(tabId: number) {
+      if (traceId) tabIds.add(tabId);
+    },
+    disconnectTab(tabId: number) {
+      tabIds.delete(tabId);
+    },
+    context(): WebRequestRecordingContext | null {
+      if (!traceId) return null;
+      return { traceId, tabIds: new Set(tabIds), allowedOrigins };
+    },
+    deactivate(): string | null {
+      const stoppedTraceId = traceId;
+      traceId = null;
+      allowedOrigins = [];
+      tabIds.clear();
+      return stoppedTraceId;
+    },
+  };
+}
+
 export type WebRequestBeforeDetails = {
   requestId: string;
   tabId: number;
