@@ -26,7 +26,7 @@ describe('CommandCenter popup', () => {
     vi.stubGlobal('chrome', {
       tabs: {
         query: vi.fn(async () => [
-          { id: 7, url: 'http://yifeng.dtsum.com/purchase/apply' },
+          { id: 7, url: 'http://127.0.0.1:8101/' },
         ]),
       },
     });
@@ -35,7 +35,7 @@ describe('CommandCenter popup', () => {
   it('shows the selected system and requires an objective before recording', async () => {
     render(<PopupApp />);
 
-    expect(await screen.findByText('益丰 MES')).toBeVisible();
+    expect(await screen.findByText('采购业务系统')).toBeVisible();
     expect(screen.getByLabelText('演示目标')).toBeVisible();
     expect(screen.getByRole('button', { name: '开始录制' })).toBeDisabled();
     expect(screen.queryByText(/同时观察 API/)).not.toBeInTheDocument();
@@ -61,7 +61,7 @@ describe('CommandCenter popup', () => {
         },
       });
     render(<PopupApp />);
-    await screen.findByText('益丰 MES');
+    await screen.findByText('采购业务系统');
 
     await userEvent.type(screen.getByLabelText('演示目标'), '查询采购申请');
     await userEvent.click(screen.getByRole('button', { name: '开始录制' }));

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_COMMAND_CENTER_PROFILE,
+  DEFAULT_COMMAND_CENTER_PROFILES,
   profileForUrl,
   originAllowed,
   type CommandCenterProfile,
@@ -13,6 +14,16 @@ describe('CommandCenter profiles', () => {
         DEFAULT_COMMAND_CENTER_PROFILE,
       ])?.systemCode,
     ).toBe('yifeng_mes');
+  });
+
+  it('selects the local purchase profile by exact origin only', () => {
+    expect(
+      profileForUrl('http://127.0.0.1:8101/', DEFAULT_COMMAND_CENTER_PROFILES)
+        ?.systemCode,
+    ).toBe('connected_system');
+    expect(
+      profileForUrl('http://127.0.0.1:81010/', DEFAULT_COMMAND_CENTER_PROFILES),
+    ).toBeNull();
   });
 
   it('does not match suffix or credential-confusion origins', () => {

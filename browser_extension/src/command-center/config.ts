@@ -7,6 +7,15 @@ export type CommandCenterProfile = {
   captureNetworkBodies: boolean;
 };
 
+export const LOCAL_PURCHASE_COMMAND_CENTER_PROFILE: CommandCenterProfile = {
+  id: 'local-purchase',
+  displayName: '采购业务系统',
+  origins: ['http://127.0.0.1:8101'],
+  systemCode: 'connected_system',
+  commandCenterUrl: 'http://127.0.0.1:8000',
+  captureNetworkBodies: true,
+};
+
 export const DEFAULT_COMMAND_CENTER_PROFILE: CommandCenterProfile = {
   id: 'yifeng-mes',
   displayName: '益丰 MES',
@@ -17,6 +26,7 @@ export const DEFAULT_COMMAND_CENTER_PROFILE: CommandCenterProfile = {
 };
 
 export const DEFAULT_COMMAND_CENTER_PROFILES: CommandCenterProfile[] = [
+  LOCAL_PURCHASE_COMMAND_CENTER_PROFILE,
   DEFAULT_COMMAND_CENTER_PROFILE,
 ];
 
