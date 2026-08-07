@@ -65,10 +65,14 @@ conda run -n langgraph python -m uvicorn app.main:app --host 127.0.0.1 --port 80
 
 ## 网络观察能力范围
 
-扩展通过注入页面脚本包装 `fetch`、XHR 和 Beacon，并记录 WebSocket/EventSource 的连接
-元数据，因此不需要 `chrome.debugger` 权限。该方法不会覆盖所有浏览器流量：注入前已发生
-的请求、Service Worker 请求、浏览器自身请求和其他扩展请求可能不可见。遇到这种情况，
-中控会保留页面证据，不会伪造 API 对齐结果。
+扩展优先通过注入页面脚本包装 `fetch`、XHR 和 Beacon，并记录 WebSocket/EventSource 的
+连接元数据。普通 HTTP 页面可能没有 Web Crypto，哈希模块会自动使用等价的本地 SHA-256
+实现，避免内容脚本因 `crypto.subtle` 缺失而中断。
+
+对于页面注入看不到的请求，扩展后台使用 `webRequest` 作为兜底，只记录活动录制标签页、
+精确允许 origin 内的 URL、方法、状态码和耗时，不读取请求头、响应头、Cookie、Token 或
+请求/响应正文。如果同一次录制已经获得页面主通道 HTTP 请求，则上传时丢弃兜底通道的
+HTTP 事件，避免重复证据。两条通道均不依赖 `chrome.debugger` 权限。
 
 ## 上游来源
 

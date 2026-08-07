@@ -9,8 +9,9 @@
 3. 有可靠网络证据时优先生成并验证 API Skill。
 4. 没有网络证据或 API 归因失败时生成 `browser_candidate`。
 5. `browser_candidate` 只能在隔离浏览器上下文中验证；不得自动回放用户当前登录的标签页。
-6. API 观察采用 Browser-BC 的页面上下文网络钩子，记录 `fetch`、XHR、Beacon、
-   WebSocket 和 EventSource 证据；不依赖 `chrome.debugger` 权限。
+6. API 观察优先采用 Browser-BC 的页面上下文网络钩子，记录 `fetch`、XHR、Beacon、
+   WebSocket 和 EventSource 证据；后台 `webRequest` 提供只含请求元数据的兼容兜底，
+   两者均不依赖 `chrome.debugger` 权限。
 
 ## 状态
 
@@ -44,11 +45,19 @@ API 录制路径已经完成自动化集成：
 4. 录制只在当前系统配置允许的精确 origin 中启用，用户切换到其他网站不会进入轨迹。
 5. 停止后自动上传证据并触发中控异步学习；上传失败时结束采集并保留 IndexedDB 证据。
 6. 构建产物不包含 `chrome.debugger` 权限。
+7. 普通 HTTP 页面的内容脚本使用本地 SHA-256 兼容实现；后台网络兜底只覆盖活动录制标签页
+   和配置允许的精确 origin，且不采集任何请求头、响应头或正文。
+8. 主页面通道存在 HTTP 请求时只上传主通道；主通道完全没有 HTTP 请求时才保留后台兜底
+   请求，避免按 URL、时间阈值或业务名称做启发式去重。
 
 2026-08-07 已增加本地真实扩展端到端测试：Playwright 启动 Chromium 并加载生产构建，
 在采购业务系统点击“刷新申请记录”，扩展记录页面动作和 `GET /api/submissions`，中控完成
 分段、API 归因、Skill 编译和三类只读验证，最终得到已验证 API Skill。测试同时比较操作
 前后的申请数据，确保录制与验证没有产生写入。真实 MES 仍待用户环境中的只读验收。
+
+同日针对普通 HTTP MES 增加兼容修复：内容脚本不再依赖安全上下文中的 Web Crypto，后台
+能够观察页面注入遗漏的同源 API 元数据。学习提示同时区分“局部操作存在不确定性”和
+“核心业务能力整体不可学习”，避免非核心页面切换缺少 URL 变化时否决证据充分的 API。
 
 ## 尚未完成
 
