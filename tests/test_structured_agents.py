@@ -307,3 +307,28 @@ def test_segmentation_rejects_evidence_ids_missing_from_trace():
         assert "unknown UI event" in str(error)
     else:
         raise AssertionError("unknown evidence reference was accepted")
+
+
+class SegmentationPromptModel:
+    def __init__(self):
+        self.prompt = ""
+
+    def generate(self, schema, system_prompt, payload):
+        self.prompt = system_prompt
+        return schema.model_validate(
+            {
+                "summary": "核心 API 证据充分，局部导航仍有不确定性",
+                "segments": [],
+                "uncertainties": [],
+                "conclusive": True,
+            }
+        )
+
+
+def test_segmentation_prompt_separates_local_uncertainty_from_overall_learnability():
+    model = SegmentationPromptModel()
+    AgentSuite(model).segment_trace({"ui_events": [], "api_exchanges": []})
+
+    assert "整体是否足以继续学习" in model.prompt
+    assert "局部不确定性" in model.prompt
+    assert "不能仅因非核心导航" in model.prompt
