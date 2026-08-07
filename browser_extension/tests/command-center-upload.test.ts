@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCommandCenterUploadRunner } from '@/command-center/upload';
+import {
+  createCommandCenterUploadRunner,
+  selectCommandCenterNetworkChannel,
+} from '@/command-center/upload';
 import { db } from '@/storage/db';
 import type { CapturedEvent, RecordingRow } from '@/shared/types';
 import type { CommandCenterEvidenceBatch } from '@/command-center/evidence';
@@ -77,6 +80,20 @@ function capturedEvents(): CapturedEvent[] {
   ];
 }
 
+function fallbackEvents(): CapturedEvent[] {
+  return capturedEvents()
+    .filter(
+      (event) =>
+        event.kind === 'network_request' || event.kind === 'network_response',
+    )
+    .map((event) => ({
+      ...event,
+      event_id: `${event.event_id}_fallback`,
+      request_id: `${event.request_id}_fallback`,
+      capture_channel: 'browser_web_request' as const,
+    }));
+}
+
 describe('CommandCenter upload runner', () => {
   beforeEach(async () => {
     await db.delete();
@@ -85,6 +102,26 @@ describe('CommandCenter upload runner', () => {
 
   afterEach(async () => {
     await db.delete();
+  });
+
+  it('prefers page HTTP evidence and removes browser fallback duplicates', () => {
+    const primary = capturedEvents();
+    const selected = selectCommandCenterNetworkChannel([
+      ...primary,
+      ...fallbackEvents(),
+    ]);
+
+    expect(selected).toEqual(primary);
+  });
+
+  it('promotes browser fallback HTTP evidence when the page channel has none', () => {
+    const action = capturedEvents()[0]!;
+    const fallback = fallbackEvents();
+
+    expect(selectCommandCenterNetworkChannel([action, ...fallback])).toEqual([
+      action,
+      ...fallback,
+    ]);
   });
 
   it('uploads converted evidence then submits asynchronous learning', async () => {

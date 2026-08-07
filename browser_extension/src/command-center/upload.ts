@@ -4,7 +4,7 @@ import {
 } from '@/command-center/client';
 import { createEvidenceConverter } from '@/command-center/evidence';
 import { db, type JourneyForgeDB } from '@/storage/db';
-import type { RecordingRow } from '@/shared/types';
+import type { CapturedEvent, RecordingRow } from '@/shared/types';
 
 class NoUploadableEvidenceError extends Error {}
 
@@ -65,7 +65,9 @@ export function createCommandCenterUploadRunner(options: {
         .where('trace_id')
         .equals(traceId)
         .sortBy('timestamp');
-      for (const event of captured) converter.append(event);
+      for (const event of selectCommandCenterNetworkChannel(captured)) {
+        converter.append(event);
+      }
       const batch = await converter.flush(connection.recording_id);
       if (!batch || batch.events.length === 0) {
         throw new NoUploadableEvidenceError(
@@ -130,6 +132,25 @@ export function createCommandCenterUploadRunner(options: {
       return next ? await uploadRecording(next.trace_id) : null;
     },
   };
+}
+
+export function selectCommandCenterNetworkChannel(
+  events: CapturedEvent[],
+): CapturedEvent[] {
+  const hasPageHttpRequest = events.some(
+    (event) =>
+      event.kind === 'network_request' &&
+      event.capture_channel !== 'browser_web_request',
+  );
+  if (!hasPageHttpRequest) return events;
+  return events.filter(
+    (event) =>
+      !(
+        (event.kind === 'network_request' ||
+          event.kind === 'network_response') &&
+        event.capture_channel === 'browser_web_request'
+      ),
+  );
 }
 
 function safeErrorMessage(error: unknown): string {
