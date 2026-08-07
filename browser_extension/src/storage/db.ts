@@ -1,6 +1,11 @@
 import Dexie, { type Table } from 'dexie';
 import type { BlobRow, CapturedEvent, CaptureSettings, RecordingMode, RecordingRow, UploadManifest } from '@/shared/types';
 import { DEFAULT_API_KEY, DEFAULT_ENDPOINT_URL } from '@/shared/product';
+import {
+  DEFAULT_COMMAND_CENTER_PROFILE,
+  DEFAULT_COMMAND_CENTER_PROFILES,
+  type CommandCenterProfile,
+} from '@/command-center/config';
 
 export type LocalePreference = 'auto' | 'en' | 'zh-CN';
 
@@ -13,6 +18,8 @@ export type ConfigRow = {
   realUserConsentAccepted: boolean;
   realUserConsentAcceptedAt?: string;
   capture: CaptureSettings;
+  commandCenterProfiles: CommandCenterProfile[];
+  selectedCommandCenterProfileId: string;
 };
 
 export const DEFAULT_CONFIG: ConfigRow = {
@@ -26,7 +33,9 @@ export const DEFAULT_CONFIG: ConfigRow = {
     screenshots: false,
     video: true,
     networkBodies: true
-  }
+  },
+  commandCenterProfiles: DEFAULT_COMMAND_CENTER_PROFILES,
+  selectedCommandCenterProfileId: DEFAULT_COMMAND_CENTER_PROFILE.id
 };
 
 export class JourneyForgeDB extends Dexie {
@@ -59,7 +68,12 @@ export async function getConfig(): Promise<ConfigRow> {
   const merged = {
     ...DEFAULT_CONFIG,
     ...current,
-    capture: { ...DEFAULT_CONFIG.capture, ...current.capture }
+    capture: { ...DEFAULT_CONFIG.capture, ...current.capture },
+    commandCenterProfiles: current.commandCenterProfiles?.length
+      ? current.commandCenterProfiles
+      : DEFAULT_COMMAND_CENTER_PROFILES,
+    selectedCommandCenterProfileId:
+      current.selectedCommandCenterProfileId || DEFAULT_COMMAND_CENTER_PROFILE.id
   };
   if (JSON.stringify(merged) !== JSON.stringify(current)) {
     await db.config.put(merged);
