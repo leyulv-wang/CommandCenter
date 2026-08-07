@@ -74,6 +74,10 @@ conda run -n langgraph python -m uvicorn app.main:app --host 127.0.0.1 --port 80
 请求/响应正文。如果同一次录制已经获得页面主通道 HTTP 请求，则上传时丢弃兜底通道的
 HTTP 事件，避免重复证据。两条通道均不依赖 `chrome.debugger` 权限。
 
+URL 中非空查询参数值会在证据转换边界使用本次录制的 HMAC 密钥逐值生成指纹，上传内容
+仅包含参数名和 `hmac-sha256` 指纹。这样智能体可以把页面输入指纹与 API 参数指纹进行
+等值对齐，但扩展外部、中控数据库和日志都不会得到查询参数原值。
+
 ## 上游来源
 
 具体来源和采用提交见 [UPSTREAM.md](UPSTREAM.md)。Browser-BC 的 Python 服务、控制面板、
