@@ -65,6 +65,7 @@
         <div>
           <strong>{{ latestExtensionRecording.objective }}</strong>
           <p>{{ latestExtensionRecording.source_system }} · {{ extensionUpdatedAt }}</p>
+          <p v-if="extensionStatusMessage">{{ extensionStatusMessage }}</p>
         </div>
         <el-tag :type="extensionStatusType">{{ extensionStatusLabel }}</el-tag>
       </div>
@@ -137,6 +138,7 @@ const extensionStatusLabel = computed(() => ({
   recording: '正在录制',
   upload_failed: '上传失败',
   analyzing: '智能体分析中',
+  api_candidate: 'API Skill 已生成',
   verified_candidate: 'Skill 验证成功',
   browser_candidate: '浏览器 Skill 待隔离验证',
   rejected: 'Skill 验证失败',
@@ -145,10 +147,15 @@ const extensionStatusLabel = computed(() => ({
 const extensionStatusType = computed(() => {
   const status = latestExtensionRecording.value?.status
   if (status === 'verified_candidate') return 'success'
-  if (status === 'browser_candidate') return 'warning'
+  if (status === 'api_candidate' || status === 'browser_candidate') return 'warning'
   if (status === 'upload_failed' || status === 'rejected') return 'danger'
   return 'primary'
 })
+const extensionStatusMessage = computed(() =>
+  latestExtensionRecording.value?.status === 'api_candidate'
+    ? '已完成录制学习，待业务系统配置执行连接后再做实时验证。'
+    : '',
+)
 const extensionUpdatedAt = computed(() => {
   const value = latestExtensionRecording.value?.updated_at
   return value ? new Date(value).toLocaleString('zh-CN') : '时间未知'

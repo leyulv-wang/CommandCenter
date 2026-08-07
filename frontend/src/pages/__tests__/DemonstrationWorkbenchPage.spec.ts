@@ -105,6 +105,7 @@ describe('DemonstrationWorkbenchPage', () => {
     ['recording', '正在录制'],
     ['upload_failed', '上传失败'],
     ['analyzing', '智能体分析中'],
+    ['api_candidate', 'API Skill 已生成'],
     ['verified_candidate', 'Skill 验证成功'],
     ['rejected', 'Skill 验证失败'],
   ] as const)('shows browser extension status %s as %s', async (status, label) => {
@@ -129,6 +130,10 @@ describe('DemonstrationWorkbenchPage', () => {
     expect(wrapper.text()).toContain('查询采购申请')
     if (status === 'upload_failed') {
       expect(wrapper.text()).toContain('证据协议校验失败')
+    }
+    if (status === 'api_candidate') {
+      expect(wrapper.text()).toContain('待业务系统配置执行连接后再做实时验证')
+      expect(wrapper.text()).not.toContain('浏览器 Skill')
     }
   })
 })

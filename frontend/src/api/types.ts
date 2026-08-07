@@ -129,6 +129,7 @@ export type ExtensionRecordingStatus =
   | 'recording'
   | 'upload_failed'
   | 'analyzing'
+  | 'api_candidate'
   | 'verified_candidate'
   | 'browser_candidate'
   | 'rejected'
