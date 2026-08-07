@@ -326,7 +326,16 @@ export type RecordingRow = {
   created_at: number;
   updated_at: number;
   upload_id?: string;
-  last_error?: string;
+  last_error?: string | undefined;
+  command_center?: {
+    base_url: string;
+    system_code: string;
+    recording_id: string;
+    recording_token: string;
+    allowed_origins: string[];
+    fingerprint_key: string;
+    remote_status?: string;
+  };
 };
 
 export type BlobRow = {

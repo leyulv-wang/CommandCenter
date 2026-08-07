@@ -4,13 +4,11 @@ import { shouldRecordBrowserNavigationUrl, tabNavigationEvent } from '@/capture/
 import {
   appendEvent,
   setRecordingLabel,
-  startRecording,
-  stopRecording,
 } from '@/recording/recorder';
+import { commandCenterSession } from '@/command-center/session';
 import { errorMessage } from '@/shared/errors';
 import type { CapturedEvent, CaptureSettings, RecordingRow } from '@/shared/types';
-import { db } from '@/storage/db';
-import { uploadRecording } from '@/upload/runner';
+import { db, getConfig } from '@/storage/db';
 
 type RuntimeMessage =
   | { type: 'get-active-recording' }
@@ -94,7 +92,7 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
       const traceId = message.traceId ?? activeTraceId;
       if (!traceId) return { active: false, traceId: null };
       await flushRecordingTabs(traceId);
-      const row = await stopRecording(traceId);
+      const row = await commandCenterSession.stop(traceId);
       if (activeTraceId === traceId) activeTraceId = null;
       activeTraceRecovered = false;
       await broadcastRecordingState(false, null, null);
@@ -111,7 +109,7 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
 
     case 'resume-upload': {
       await ensureUploadable(message.traceId, message.label);
-      const row = await uploadRecording(message.traceId);
+      const row = await commandCenterSession.resumeUpload(message.traceId);
       return { ok: true, row };
     }
 
@@ -129,7 +127,16 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
 }
 
 async function beginRecording(label?: string): Promise<RecordingRow> {
-  const row = await startRecording(undefined, label ? { label } : undefined);
+  const config = await getConfig();
+  const profile =
+    config.commandCenterProfiles.find(
+      (candidate) => candidate.id === config.selectedCommandCenterProfileId,
+    ) ?? config.commandCenterProfiles[0];
+  if (!profile) throw new Error('没有可用的业务系统录制配置。');
+  const row = await commandCenterSession.start({
+    objective: label?.trim() || '浏览器演示任务',
+    profile,
+  });
   activeTraceId = row.trace_id;
   activeTraceRecovered = false;
   const captureSettings = await captureSettingsForActiveRecording(activeTraceId, row);

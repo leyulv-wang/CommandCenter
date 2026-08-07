@@ -7,7 +7,10 @@ import { db, getConfig } from '@/storage/db';
 
 export async function startRecording(
   clock: Clock = systemClock,
-  opts?: { label?: string }
+  opts?: {
+    label?: string;
+    commandCenter?: NonNullable<RecordingRow['command_center']>;
+  }
 ): Promise<RecordingRow> {
   const config = await getConfig();
   if (!config.endpoint_url || !config.api_key) {
@@ -50,6 +53,7 @@ export async function startRecording(
     },
     created_at: now,
     updated_at: now,
+    ...(opts?.commandCenter ? { command_center: opts.commandCenter } : {}),
   };
 
   await db.transaction('rw', db.recordings, db.events, async () => {
