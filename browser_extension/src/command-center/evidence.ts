@@ -39,6 +39,7 @@ export type CommandCenterNetworkExchange = {
   method: string;
   path_template: string;
   query_parameter_names: string[];
+  query_parameter_fingerprints: Record<string, string[]>;
   request_fingerprint?: string;
   response_status: number;
   response_fingerprint?: string;
@@ -281,6 +282,17 @@ async function convertExchange(
   const responseMaterial = usableValue(response.res_body);
   const requestFingerprint = requestMaterial ? await fingerprint(requestMaterial, key) : undefined;
   const responseFingerprint = responseMaterial ? await fingerprint(responseMaterial, key) : undefined;
+  const queryParameterNames = identifierList([...url.searchParams.keys()]);
+  const queryParameterFingerprints: Record<string, string[]> = {};
+  let queryFingerprintCount = 0;
+  for (const name of queryParameterNames) {
+    const values = url.searchParams.getAll(name).filter(Boolean);
+    if (values.length === 0) continue;
+    queryParameterFingerprints[name] = await Promise.all(
+      values.map((value) => fingerprint(value, key)),
+    );
+    queryFingerprintCount += values.length;
+  }
   return {
     event: {
       exchange_id: randomUuid(),
@@ -289,13 +301,18 @@ async function convertExchange(
       completed_at: isoTime(Math.max(request.timestamp, response.timestamp)),
       method: request.method,
       path_template: url.pathname || '/',
-      query_parameter_names: identifierList([...url.searchParams.keys()]),
+      query_parameter_names: queryParameterNames,
+      query_parameter_fingerprints: queryParameterFingerprints,
       ...(requestFingerprint ? { request_fingerprint: requestFingerprint } : {}),
       response_status: Number.isInteger(response.status) ? response.status! : 0,
       ...(responseFingerprint ? { response_fingerprint: responseFingerprint } : {}),
       endpoint_fingerprint: await fingerprint(`${request.method} ${url.pathname || '/'}`, key),
     } satisfies CommandCenterNetworkExchange,
-    fingerprinted: 1 + (requestFingerprint ? 1 : 0) + (responseFingerprint ? 1 : 0),
+    fingerprinted:
+      1 +
+      queryFingerprintCount +
+      (requestFingerprint ? 1 : 0) +
+      (responseFingerprint ? 1 : 0),
     redacted: (request.req_body ? 1 : 0) + (response.res_body ? 1 : 0) + Object.keys(request.req_headers).length,
   };
 }

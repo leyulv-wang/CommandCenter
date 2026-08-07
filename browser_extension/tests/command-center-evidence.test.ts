@@ -17,6 +17,68 @@ function base(kind: CapturedEvent['kind'], timestamp: number) {
 }
 
 describe('CommandCenter evidence converter', () => {
+  it('aligns UI values with repeated query values without exposing raw text', async () => {
+    const converter = createEvidenceConverter({
+      allowedOrigins: ['http://yifeng.dtsum.com'],
+      fingerprintKey: 'local-recording-key',
+    });
+
+    converter.append({
+      ...base('action', 1_000),
+      kind: 'action',
+      action_type: 'input',
+      target: {
+        tag: 'input',
+        role: 'input',
+        name: '申请人',
+        selector: '#apply-by',
+        xpath: '//*[@id="apply-by"]',
+      },
+      value: { value: 'alice' },
+    });
+    converter.append({
+      ...base('network_request', 1_010),
+      kind: 'network_request',
+      request_id: 'req-query-values',
+      method: 'GET',
+      full_url:
+        'http://yifeng.dtsum.com/jeecg-boot/purchase/apply/list?applyBy=alice&tag=a&tag=b&empty=',
+      fetch_kind: 'xhr',
+      req_headers: {},
+    });
+    converter.append({
+      ...base('network_response', 1_020),
+      kind: 'network_response',
+      request_id: 'req-query-values',
+      status: 200,
+    });
+
+    const batch = await converter.flush(recordingId);
+    const input = batch?.events.find((event) => 'event_type' in event);
+    const exchange = batch?.events.find((event) => 'method' in event);
+
+    expect(exchange).toMatchObject({
+      query_parameter_names: ['applyBy', 'empty', 'tag'],
+      query_parameter_fingerprints: {
+        applyBy: [expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/)],
+        tag: [
+          expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/),
+          expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/),
+        ],
+      },
+    });
+    expect(exchange?.query_parameter_fingerprints.empty).toBeUndefined();
+    const applyByFingerprints = exchange?.query_parameter_fingerprints.applyBy;
+    const tagFingerprints = exchange?.query_parameter_fingerprints.tag;
+    expect(applyByFingerprints).toHaveLength(1);
+    expect(tagFingerprints).toHaveLength(2);
+    expect(input?.value_fingerprint).toBe(
+      applyByFingerprints?.[0],
+    );
+    expect(tagFingerprints?.[0]).not.toBe(tagFingerprints?.[1]);
+    expect(JSON.stringify(batch)).not.toContain('alice');
+  });
+
   it('orders a page action and its completed API exchange without raw values', async () => {
     const converter = createEvidenceConverter({
       allowedOrigins: ['http://yifeng.dtsum.com'],
