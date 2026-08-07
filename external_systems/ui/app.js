@@ -73,6 +73,11 @@ async function refreshData() {
   await refreshStatus()
 }
 
+async function refreshSubmissions() {
+  const submissions = await request('/api/submissions')
+  renderList('submission-list', submissions.items)
+}
+
 function idempotencyKey(action, objectId = crypto.randomUUID()) {
   return `demo:${profile.system_code}:${objectId}:${action}`
 }
@@ -170,6 +175,7 @@ async function init() {
   byId('purchase-operation').hidden = profile.interface_type !== 'workflow'
   byId('purchase-link-operation').hidden = profile.system_code !== 'onboarding_system'
   byId('refresh-button').addEventListener('click', () => refreshData().catch((error) => showMessage(error.message)))
+  byId('refresh-submissions-button').addEventListener('click', () => refreshSubmissions().catch((error) => showMessage(error.message)))
   byId('reset-button').addEventListener('click', () => resetSystem().catch((error) => showMessage(error.message)))
   initTabs()
   await refreshData()

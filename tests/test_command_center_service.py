@@ -519,3 +519,67 @@ def test_ui_only_trace_becomes_browser_candidate_without_api_verification(tmp_pa
     assert result["learning_result"]["verification_status"] == "pending_isolated_browser"
     assert distiller.origins == ["https://mes.example.test"]
     assert extension.cleared is not None
+
+
+def test_api_rejection_is_preserved_when_browser_fallback_is_created(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+
+    class BrowserDistiller:
+        def compile_browser_skill(self, trace, allowed_origins):
+            return {
+                "name": "查询订单",
+                "execution_mode": "browser",
+                "status": "candidate",
+                "source_recording_id": trace["recording_id"],
+                "steps": [{"action": "click"}],
+            }
+
+    class ClearableExtension:
+        def clear_credentials(self, recording_id):
+            pass
+
+    api_rejection = {
+        "final_status": "rejected",
+        "failure_stage": "analysis",
+        "failure_reasons": ["无法确认主业务 API。"],
+    }
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+        extension_recorder=ClearableExtension(),
+        learning_graph_factory=lambda _system_code, _recording_id: Graph(api_rejection),
+        browser_skill_distiller=BrowserDistiller(),
+    )
+    created = service.create_recording(
+        CreateRecordingRequest(
+            objective="查询订单",
+            source_system="mes",
+            source_task_id="manual-demo",
+            capture_source="browser_extension",
+        )
+    )
+    recording = repository.get_recording(created["recording_id"])
+    recording.update(
+        {
+            "status": "recorded",
+            "trace": {
+                "recording_id": created["recording_id"],
+                "ui_events": [
+                    {
+                        "event_id": str(uuid4()),
+                        "action_type": "click",
+                        "page_url": "https://mes.example.test/orders",
+                    }
+                ],
+                "api_exchanges": [{"exchange_id": str(uuid4())}],
+            },
+        }
+    )
+    repository.save_recording(created["recording_id"], recording)
+
+    result = service.analyze_extension_recording(created["recording_id"])
+
+    assert result["status"] == "browser_candidate"
+    assert result["api_learning_result"] == api_rejection

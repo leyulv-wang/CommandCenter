@@ -1,0 +1,44 @@
+{
+  "system_code": "connected_system",
+  "display_name": "采购业务系统",
+  "allowed_hosts": ["127.0.0.1"],
+  "openapi_url": "http://127.0.0.1:8101/openapi.json",
+  "base_url": "http://127.0.0.1:8101",
+  "api_path_prefix": "/api/",
+  "credential_header": null,
+  "limits": {
+    "request_timeout_seconds": 10,
+    "max_response_bytes": 1048576,
+    "max_requests_per_minute": 60
+  },
+  "value_capture_policy": "fingerprint_by_default",
+  "sensitive_field_patterns": [
+    "(?i)password",
+    "(?i)token",
+    "(?i)captcha",
+    "(?i)authorization",
+    "(?i)cookie"
+  ],
+  "tool_permissions": [
+    {
+      "method": "GET",
+      "path": "/api/tasks",
+      "side_effect": "read"
+    },
+    {
+      "method": "GET",
+      "path": "/api/submissions",
+      "side_effect": "read"
+    },
+    {
+      "method": "GET",
+      "path": "/api/interface-spec",
+      "side_effect": "read"
+    },
+    {
+      "method": "GET",
+      "path": "/api/system-profile",
+      "side_effect": "read"
+    }
+  ]
+}

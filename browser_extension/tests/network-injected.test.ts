@@ -83,6 +83,22 @@ describe('network injected hook', () => {
     expect(originalFetch).toHaveBeenCalledWith(request, undefined);
   });
 
+  it('records a relative fetch URL as the absolute page request URL', async () => {
+    const originalFetch = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', originalFetch);
+    const seen: Array<{ phase: string; url: string }> = [];
+    window.addEventListener('journey-forge::network::relative', (event) => {
+      seen.push((event as CustomEvent).detail);
+    });
+
+    installNetworkHook(networkHookConfig('relative'));
+    await fetch('/api/submissions');
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]?.url).toBe(new URL('/api/submissions', window.location.href).href);
+    expect(seen[1]?.url).toBe(new URL('/api/submissions', window.location.href).href);
+  });
+
   it('emits WebSocket metadata without raw payloads', () => {
     const sentPayloads: unknown[] = [];
     class FakeWebSocket extends EventTarget {

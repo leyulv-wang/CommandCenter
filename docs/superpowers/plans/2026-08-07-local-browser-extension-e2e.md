@@ -285,7 +285,7 @@ git commit -m "fix: restore latest browser recording result"
 
 **Files:**
 - Modify: `browser_extension/package.json`
-- Modify: `browser_extension/package-lock.json`
+- Modify: `browser_extension/pnpm-lock.yaml`
 - Create: `browser_extension/playwright.config.ts`
 - Create: `browser_extension/e2e/local-purchase-recording.spec.ts`
 - Create: `browser_extension/e2e/extension-harness.ts`
@@ -306,7 +306,7 @@ Install `@playwright/test` as a development dependency. Write a test that:
 3. discovers the MV3 extension ID from its service-worker URL;
 4. opens the purchase page before starting the recording;
 5. opens `chrome-extension://<id>/popup.html`, selects the local profile by active tab, enters `查询采购申请`, and starts recording;
-6. clicks the purchase page's `刷新数据` button and waits for `GET /api/tasks`;
+6. switches to `申请记录`, clicks `刷新申请记录`, and waits for `GET /api/submissions`;
 7. stops recording through the actual popup;
 8. reads IndexedDB in the service-worker origin and asserts at least one `action` plus one network request/response event exists;
 9. polls the CommandCenter recording until it reaches a successful terminal state within a bounded timeout; model configuration errors and analysis failures fail the E2E rather than being accepted as a partial pass;
@@ -340,7 +340,7 @@ Add `browser_extension/test-results/` and `browser_extension/playwright-report/`
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add browser_extension/package.json browser_extension/package-lock.json browser_extension/playwright.config.ts browser_extension/e2e/extension-harness.ts browser_extension/e2e/local-purchase-recording.spec.ts .gitignore README.md
+git add browser_extension/package.json browser_extension/pnpm-lock.yaml browser_extension/playwright.config.ts browser_extension/e2e/extension-harness.ts browser_extension/e2e/local-purchase-recording.spec.ts .gitignore README.md
 git commit -m "test: add local purchase extension e2e"
 ```
 

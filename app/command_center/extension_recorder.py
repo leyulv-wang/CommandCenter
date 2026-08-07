@@ -174,10 +174,11 @@ class ExtensionRecorder:
         token: str,
     ) -> None:
         session = self._authorized_session(recording_id, token)
-        if name.casefold() != session.profile.credential_header.casefold():
+        credential_header = session.profile.credential_header
+        if credential_header is None or name.casefold() != credential_header.casefold():
             self.credential_vault.clear(recording_id)
             raise ValueError("credential header is not allowed for this profile")
-        self.credential_vault.put(recording_id, session.profile.credential_header, secret)
+        self.credential_vault.put(recording_id, credential_header, secret)
 
     def stop(
         self,

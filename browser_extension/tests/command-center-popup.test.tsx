@@ -70,6 +70,7 @@ describe('CommandCenter popup', () => {
       expect(sendRuntimeMessage).toHaveBeenCalledWith({
         type: 'start-recording',
         label: '查询采购申请',
+        profileId: 'local-purchase',
       }),
     );
   });

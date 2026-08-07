@@ -120,6 +120,7 @@ export function PopupApp() {
       const response = await sendRuntimeMessage<RecordingActionResponse>({
         type: 'start-recording',
         label: objective.trim(),
+        profileId: profile.id,
       });
       if (!response.row) throw new Error('扩展未返回录制会话。');
       setActiveRow(response.row);

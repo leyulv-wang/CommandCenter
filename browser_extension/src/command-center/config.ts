@@ -48,6 +48,13 @@ export function profileForUrl(
   );
 }
 
+export function profileById(
+  profileId: string,
+  profiles: readonly CommandCenterProfile[],
+): CommandCenterProfile | null {
+  return profiles.find((profile) => profile.id === profileId) ?? null;
+}
+
 export function originAllowed(
   url: string,
   allowedOrigins: readonly string[],

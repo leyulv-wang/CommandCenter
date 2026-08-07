@@ -49,7 +49,7 @@ class SystemProfile(BaseModel):
     openapi_url: HttpUrl
     base_url: HttpUrl
     api_path_prefix: str
-    credential_header: Literal["X-Access-Token"]
+    credential_header: Literal["X-Access-Token"] | None = None
     limits: ProfileLimits
     value_capture_policy: Literal["fingerprint_by_default"]
     sensitive_field_patterns: list[str]

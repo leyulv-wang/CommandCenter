@@ -4,6 +4,7 @@ import {
   DEFAULT_COMMAND_CENTER_PROFILES,
   profileForUrl,
   originAllowed,
+  profileById,
   type CommandCenterProfile,
 } from '@/command-center/config';
 
@@ -24,6 +25,13 @@ describe('CommandCenter profiles', () => {
     expect(
       profileForUrl('http://127.0.0.1:81010/', DEFAULT_COMMAND_CENTER_PROFILES),
     ).toBeNull();
+  });
+
+  it('selects the explicitly requested trusted profile for a recording', () => {
+    expect(profileById('local-purchase', DEFAULT_COMMAND_CENTER_PROFILES)?.systemCode).toBe(
+      'connected_system',
+    );
+    expect(profileById('unknown-profile', DEFAULT_COMMAND_CENTER_PROFILES)).toBeNull();
   });
 
   it('does not match suffix or credential-confusion origins', () => {

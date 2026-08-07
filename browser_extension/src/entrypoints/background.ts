@@ -6,6 +6,7 @@ import {
   setRecordingLabel,
 } from '@/recording/recorder';
 import { commandCenterSession } from '@/command-center/session';
+import { profileById } from '@/command-center/config';
 import { connectRecordingTab } from '@/recording/tab-connection';
 import { latestCommandCenterRecording } from '@/recording/latest-command-center';
 import { errorMessage } from '@/shared/errors';
@@ -14,7 +15,7 @@ import { db, getConfig } from '@/storage/db';
 
 type RuntimeMessage =
   | { type: 'get-active-recording' }
-  | { type: 'start-recording'; label?: string }
+  | { type: 'start-recording'; label?: string; profileId?: string }
   | { type: 'stop-recording'; traceId?: string }
   | { type: 'get-command-center-status'; traceId: string }
   | { type: 'event'; event: CapturedEvent }
@@ -88,7 +89,7 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
     }
 
     case 'start-recording': {
-      const row = await beginRecording(message.label);
+      const row = await beginRecording(message.label, message.profileId);
       const captureSettings = await captureSettingsForActiveRecording(row.trace_id, row);
       return { active: true, traceId: activeTraceId, recovered: false, captureSettings, row };
     }
@@ -143,12 +144,17 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
   }
 }
 
-async function beginRecording(label?: string): Promise<RecordingRow> {
+async function beginRecording(
+  label?: string,
+  profileId?: string,
+): Promise<RecordingRow> {
   const config = await getConfig();
-  const profile =
-    config.commandCenterProfiles.find(
-      (candidate) => candidate.id === config.selectedCommandCenterProfileId,
-    ) ?? config.commandCenterProfiles[0];
+  const requestedProfileId =
+    profileId ?? config.selectedCommandCenterProfileId;
+  const profile = profileById(
+    requestedProfileId,
+    config.commandCenterProfiles,
+  );
   if (!profile) throw new Error('没有可用的业务系统录制配置。');
   const row = await commandCenterSession.start({
     objective: label?.trim() || '浏览器演示任务',

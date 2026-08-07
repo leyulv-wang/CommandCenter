@@ -22,6 +22,8 @@ frontend/.vite/
 browser_extension/node_modules/
 browser_extension/dist/
 browser_extension/.wxt/
+browser_extension/test-results/
+browser_extension/playwright-report/
 *.tsbuildinfo
 external_systems/**/data/
 app/data/external_systems.json

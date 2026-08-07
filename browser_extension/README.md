@@ -12,7 +12,12 @@ pnpm install --frozen-lockfile
 pnpm test
 pnpm typecheck
 pnpm build
+pnpm test:e2e:local
 ```
+
+`test:e2e:local` 会自动启动中控和本地采购系统，用真实 Chromium 扩展录制一次只读的
+“刷新申请记录”操作，等待智能体生成并验证 API Skill，并确认采购数据没有变化。首次运行
+前如本机尚无 Playwright Chromium，可执行 `pnpm exec playwright install chromium`。
 
 在 Chrome 或 Edge 的扩展管理页面启用开发者模式，选择“加载解压缩的扩展”，加载：
 

@@ -61,6 +61,19 @@ def test_yifeng_profile_only_allows_three_read_operations():
     )
 
 
+def test_local_purchase_profile_allows_only_read_endpoints():
+    profile = load_system_profile(
+        Path("app/data/system_profiles/connected_system.json")
+    )
+
+    assert profile.system_code == "connected_system"
+    assert profile.allowed_hosts == {"127.0.0.1"}
+    assert profile.credential_header is None
+    assert profile.is_allowed("GET", "/api/tasks")
+    assert profile.is_allowed("GET", "/api/submissions")
+    assert not profile.is_allowed("POST", "/api/purchase-requests")
+
+
 def test_profile_rejects_wildcard_permissions():
     payload = valid_profile_payload()
     payload["tool_permissions"] = [

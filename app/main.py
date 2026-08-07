@@ -303,9 +303,12 @@ def build_command_center_components(
     repository = repository or CommandCenterRepository(database_url)
     agents = agents or AgentSuite(StructuredModel.from_environment())
     profiles = profiles or {
+        "connected_system": load_system_profile(
+            Path("app/data/system_profiles/connected_system.json")
+        ),
         "yifeng_mes": load_system_profile(
             Path("app/data/system_profiles/yifeng_mes.json")
-        )
+        ),
     }
     loader = openapi_loader or OpenAPIDocumentLoader(
         client,

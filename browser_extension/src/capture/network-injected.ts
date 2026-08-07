@@ -111,7 +111,7 @@ function hookXhr(): void {
     metadata.set(this, {
       requestId: createNetworkId(),
       method: method.toUpperCase(),
-      url: String(url),
+      url: absoluteUrl(url),
       headers: {},
       started: 0
     });
@@ -171,7 +171,7 @@ function hookBeacon(): void {
     const requestId = createNetworkId();
     const started = performance.now();
     const ok = originalSendBeacon.call(navigator, url, data);
-    const targetUrl = String(url);
+    const targetUrl = absoluteUrl(url);
     emit({
       phase: 'request',
       requestId,
@@ -203,7 +203,7 @@ function hookWebSocket(): void {
   const JourneyForgeWebSocket = (function JourneyForgeWebSocket(url: string | URL, protocols?: string | string[]) {
     const socket = protocols === undefined ? new NativeWebSocket(url) : new NativeWebSocket(url, protocols);
     const streamId = createStreamId('ws_');
-    const fullUrl = String(url);
+    const fullUrl = absoluteUrl(url);
     streamIds.set(socket, streamId);
     socket.addEventListener('open', () => {
       emitStream({ stream_type: 'websocket', phase: 'open', stream_id: streamId, full_url: fullUrl });
@@ -254,7 +254,7 @@ function hookEventSource(): void {
   const JourneyForgeEventSource = (function JourneyForgeEventSource(url: string | URL, eventSourceInitDict?: EventSourceInit) {
     const source = new NativeEventSource(url, eventSourceInitDict);
     const streamId = createStreamId('es_');
-    const fullUrl = String(url);
+    const fullUrl = absoluteUrl(url);
     streamIds.set(source, streamId);
     source.addEventListener('open', () => {
       emitStream({ stream_type: 'eventsource', phase: 'open', stream_id: streamId, full_url: fullUrl });
@@ -288,7 +288,7 @@ function hookEventSource(): void {
 async function requestFromFetch(input: RequestInfo | URL, init?: RequestInit): Promise<{ method: string; url: string; headers: Record<string, string>; body?: string }> {
   const fromRequest = input instanceof Request ? input : null;
   const method = (init?.method ?? fromRequest?.method ?? 'GET').toUpperCase();
-  const url = input instanceof Request ? input.url : String(input);
+  const url = absoluteUrl(input instanceof Request ? input.url : input);
   const headers = headersToRecord(init?.headers ?? fromRequest?.headers);
   const body = init?.body !== undefined ? bodyField(init.body) : await bodyFieldFromRequest(fromRequest);
 
@@ -357,6 +357,14 @@ function getHookState(): NetworkHookState {
 
 function optionalString<K extends string>(key: K, value: string | null | undefined): { [P in K]?: string } {
   return (value ? { [key]: value } : {}) as { [P in K]?: string };
+}
+
+function absoluteUrl(value: string | URL): string {
+  try {
+    return new URL(String(value), window.location.href).href;
+  } catch {
+    return String(value);
+  }
 }
 
 function createNetworkId(): string {
