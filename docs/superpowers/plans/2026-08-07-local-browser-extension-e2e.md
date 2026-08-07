@@ -309,7 +309,7 @@ Install `@playwright/test` as a development dependency. Write a test that:
 6. clicks the purchase page's `刷新数据` button and waits for `GET /api/tasks`;
 7. stops recording through the actual popup;
 8. reads IndexedDB in the service-worker origin and asserts at least one `action` plus one network request/response event exists;
-9. polls the CommandCenter recording until it leaves `recording` and reaches a documented terminal or queued-learning state within a bounded timeout;
+9. polls the CommandCenter recording until it reaches a successful terminal state within a bounded timeout; model configuration errors and analysis failures fail the E2E rather than being accepted as a partial pass;
 10. reloads the popup and asserts the recent result remains visible;
 11. compares `/api/submissions` after the run with the before snapshot.
 
