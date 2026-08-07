@@ -7,6 +7,7 @@ from uuid import uuid4
 from app.command_center.schemas import SkillDefinition
 from app.command_center.testing import SkillRunner
 from app.command_center.tool_catalog import ToolCatalog
+from app.command_center.tool_executor import BindingResolver
 
 
 class ReadOnlySkillTestService:
@@ -37,11 +38,20 @@ class ReadOnlySkillTestService:
                 {"task_id": "readonly-test", "system_code": "readonly", "content": {}},
             )
             literals = case.get("invocation", {})
+            if not self._external_bindings_resolve(skill, task, literals):
+                return self._failed(
+                    category, "test data does not satisfy Skill bindings"
+                )
             run_count = 2 if category == "idempotency" else 1
-            runs = [
-                self.runner.run(skill, task, run_id=uuid4(), literals=literals)
-                for _ in range(run_count)
-            ]
+            try:
+                runs = [
+                    self.runner.run(skill, task, run_id=uuid4(), literals=literals)
+                    for _ in range(run_count)
+                ]
+            except KeyError:
+                return self._failed(
+                    category, "test data does not satisfy Skill bindings"
+                )
             step_results = [step for run in runs for step in run.step_results]
             if any(run.status != "succeeded" for run in runs):
                 return self._failed(category, "query execution failed", step_results)
@@ -67,6 +77,22 @@ class ReadOnlySkillTestService:
             }
         finally:
             self.credential_cleanup()
+
+    @staticmethod
+    def _external_bindings_resolve(
+        skill: SkillDefinition,
+        task: dict[str, Any],
+        literals: dict[str, Any],
+    ) -> bool:
+        context = {"task": task, "literal": literals, "steps": {}}
+        try:
+            for step in skill.steps:
+                for expression in step.input_bindings.values():
+                    if expression.startswith(("task.", "literal.")):
+                        BindingResolver.resolve(expression, context)
+        except (KeyError, ValueError):
+            return False
+        return True
 
     @staticmethod
     def _failed(category: str, summary: str, step_results: list[Any] | None = None):

@@ -5,16 +5,19 @@ import httpx
 from pydantic import SecretStr
 
 from app.command_center.repository import CommandCenterRepository
+from app.command_center.readonly_testing import ReadOnlySkillTestService
 from app.command_center.router import CreateRecordingRequest
 from app.command_center.schemas import (
     APIAttributionAnalysis,
     FieldMappingAnalysis,
     SkillDefinition,
+    StepResult,
     TestPlan as SkillTestPlan,
     TraceSegmentation,
 )
 from app.command_center.system_profiles import ProfileLimits, SystemProfile, ToolPermission
-from app.command_center.tool_catalog import ToolCatalog
+from app.command_center.testing import SkillRunner
+from app.command_center.tool_catalog import ToolCatalog, ToolDefinition
 from app.main import build_command_center_components
 
 
@@ -295,3 +298,129 @@ def test_local_test_system_outage_does_not_block_readonly_observer(tmp_path):
     )
 
     assert components.service.list_skills() == []
+
+
+def task_bound_readonly_skill() -> SkillDefinition:
+    return SkillDefinition.model_validate(
+        {
+            "skill_id": str(uuid4()),
+            "version": 1,
+            "name": "查询部门申请",
+            "description": "按任务中的部门查询申请",
+            "status": "testing",
+            "trigger_examples": ["查询采购部申请"],
+            "source_recording_id": str(uuid4()),
+            "inputs": [
+                {
+                    "name": "department",
+                    "type": "string",
+                    "description": "部门",
+                    "required": True,
+                }
+            ],
+            "outputs": [],
+            "steps": [
+                {
+                    "step_id": "query",
+                    "name": "查询",
+                    "tool_id": "mes:list",
+                    "input_bindings": {
+                        "query.department": "task.content.department"
+                    },
+                    "side_effect": "read",
+                }
+            ],
+            "success_conditions": [],
+        }
+    )
+
+
+def readonly_catalog() -> ToolCatalog:
+    return ToolCatalog(
+        [
+            ToolDefinition(
+                tool_id="mes:list",
+                system_code="mes",
+                operation_id="list",
+                method="GET",
+                base_url="https://mes.test",
+                path_template="/list",
+                content_type=None,
+                side_effect="read",
+            )
+        ]
+    )
+
+
+class CapturingReadExecutor:
+    def __init__(self):
+        self.commands = []
+
+    def execute(self, command):
+        self.commands.append(command)
+        now = datetime.now(UTC)
+        return StepResult(
+            run_id=command.run_id,
+            step_id=command.step_id,
+            tool_id=command.tool_id,
+            status="succeeded",
+            started_at=now,
+            ended_at=now,
+            normalized_output={"result": {"records": []}},
+            side_effect={"occurred": False},
+        )
+
+
+def test_readonly_test_returns_structured_failure_before_tool_for_missing_task_binding():
+    executor = CapturingReadExecutor()
+    tester = ReadOnlySkillTestService(
+        catalog=readonly_catalog(),
+        runner=SkillRunner(executor),
+    )
+
+    result = tester.run(
+        task_bound_readonly_skill(),
+        {
+            "category": "normal",
+            "fixture": {
+                "source_task": {
+                    "task_id": "test",
+                    "system_code": "mes",
+                    "content": {},
+                }
+            },
+            "invocation": {},
+        },
+    )
+
+    assert result["status"] == "failed"
+    assert result["verification"]["summary"] == (
+        "test data does not satisfy Skill bindings"
+    )
+    assert executor.commands == []
+
+
+def test_readonly_test_executes_when_task_binding_is_present():
+    executor = CapturingReadExecutor()
+    tester = ReadOnlySkillTestService(
+        catalog=readonly_catalog(),
+        runner=SkillRunner(executor),
+    )
+
+    result = tester.run(
+        task_bound_readonly_skill(),
+        {
+            "category": "normal",
+            "fixture": {
+                "source_task": {
+                    "task_id": "test",
+                    "system_code": "mes",
+                    "content": {"department": "采购部"},
+                }
+            },
+            "invocation": {},
+        },
+    )
+
+    assert result["status"] == "passed"
+    assert executor.commands[0].arguments == {"query": {"department": "采购部"}}
