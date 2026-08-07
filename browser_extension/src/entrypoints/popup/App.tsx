@@ -124,7 +124,10 @@ export function PopupApp() {
       setActiveRow(response.row);
       setRemoteStatus({
         recording_id: response.row.command_center?.recording_id ?? '',
-        status: response.row.command_center?.remote_status ?? 'queued',
+        status:
+          response.row.status === 'failed'
+            ? 'failed'
+            : response.row.command_center?.remote_status ?? 'queued',
       });
       setView('processing');
     });

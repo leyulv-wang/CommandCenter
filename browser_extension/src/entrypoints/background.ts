@@ -94,11 +94,19 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
       const traceId = message.traceId ?? activeTraceId;
       if (!traceId) return { active: false, traceId: null };
       await flushRecordingTabs(traceId);
-      const row = await commandCenterSession.stop(traceId);
-      if (activeTraceId === traceId) activeTraceId = null;
-      activeTraceRecovered = false;
-      await broadcastRecordingState(false, null, null, []);
-      await refreshRecordingBadge();
+      let row: RecordingRow;
+      try {
+        row = await commandCenterSession.stop(traceId);
+      } catch (error) {
+        const failed = await db.recordings.get(traceId);
+        if (!failed) throw error;
+        row = failed;
+      } finally {
+        if (activeTraceId === traceId) activeTraceId = null;
+        activeTraceRecovered = false;
+        await broadcastRecordingState(false, null, null, []);
+        await refreshRecordingBadge();
+      }
       return { active: false, traceId: null, recovered: false, captureSettings: null, row };
     }
 
