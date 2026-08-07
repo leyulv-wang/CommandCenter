@@ -7,6 +7,7 @@ from app.command_center.schemas import (
     APIAttributionAnalysis,
     DemonstrationAnalysis,
     FieldMappingAnalysis,
+    SkillDefinition,
     TestPlan as SkillTestPlan,
 )
 from app.command_center.tool_catalog import ToolCatalog
@@ -111,6 +112,29 @@ class PromptCapturingModel:
                     "summary": "状态变化与执行结果一致",
                 }
             )
+        if schema.__name__ == "TestPlan":
+            skill = payload["skill"]
+            return schema.model_validate(
+                {
+                    "skill_id": str(skill.skill_id),
+                    "skill_version": skill.version,
+                    "cases": [
+                        {
+                            "case_id": category,
+                            "category": category,
+                            "description": category,
+                            "fixture": {},
+                            "invocation": {},
+                            "expected": {},
+                        }
+                        for category in (
+                            "normal",
+                            "parameter_variation",
+                            "idempotency",
+                        )
+                    ],
+                }
+            )
         raise AssertionError(schema)
 
 
@@ -127,6 +151,22 @@ def test_agent_suite_produces_three_required_test_categories():
         "parameter_variation",
         "idempotency",
     }
+
+
+def test_test_design_agent_places_every_binding_namespace_in_executable_context():
+    model = PromptCapturingModel()
+    agents = AgentSuite(model)
+    skill = SkillDefinition.model_validate(valid_skill_payload())
+
+    agents.design_tests(skill)
+
+    prompt = model.prompts[-1]
+    assert "task.*" in prompt
+    assert "fixture.source_task" in prompt
+    assert "literal.*" in prompt
+    assert "invocation" in prompt
+    assert "steps.*" in prompt
+    assert "前序步骤" in prompt
 
 
 def test_analysis_and_compilation_agents_share_generic_binding_protocol():

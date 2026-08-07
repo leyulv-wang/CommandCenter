@@ -149,7 +149,10 @@ class AgentSuite:
             (
                 "你是测试设计智能体。为候选 Skill 生成 normal、parameter_variation、"
                 "idempotency 三类测试，每类恰好一个，数据仅用于本地采购测试系统。"
-                "每个 case 的 invocation 必须为 Skill 的全部 literal 输入提供可执行值。"
+                "逐项检查 Skill 全部 input_bindings：每个 task.* 绑定都必须在该 case 的 "
+                "fixture.source_task 中提供可解析值，每个 literal.* 绑定都必须在 invocation "
+                "中提供可执行值；每个 steps.* 绑定必须引用该 Skill 中真实存在且位于当前步骤"
+                "之前的前序步骤输出。不得省略必需绑定，也不得为不存在的前序步骤编造数据。"
             ),
             {"skill": skill},
         )
