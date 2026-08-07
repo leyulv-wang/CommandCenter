@@ -138,12 +138,14 @@ const extensionStatusLabel = computed(() => ({
   upload_failed: '上传失败',
   analyzing: '智能体分析中',
   verified_candidate: 'Skill 验证成功',
+  browser_candidate: '浏览器 Skill 待隔离验证',
   rejected: 'Skill 验证失败',
   recorded: '录制完成',
 }[latestExtensionRecording.value?.status ?? 'created']))
 const extensionStatusType = computed(() => {
   const status = latestExtensionRecording.value?.status
   if (status === 'verified_candidate') return 'success'
+  if (status === 'browser_candidate') return 'warning'
   if (status === 'upload_failed' || status === 'rejected') return 'danger'
   return 'primary'
 })

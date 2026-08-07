@@ -130,6 +130,7 @@ export type ExtensionRecordingStatus =
   | 'upload_failed'
   | 'analyzing'
   | 'verified_candidate'
+  | 'browser_candidate'
   | 'rejected'
   | 'recorded'
 
@@ -142,6 +143,13 @@ export interface RecordingSummary {
   created_at?: string | null
   updated_at?: string | null
   failure_reasons: string[]
+  analysis_stage?:
+    | 'recorded'
+    | 'queued'
+    | 'learning'
+    | 'completed'
+    | 'awaiting_browser_verification'
+    | 'failed'
 }
 
 export interface TaskRunView {

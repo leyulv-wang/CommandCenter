@@ -47,9 +47,9 @@ class FakeCommandCenterService:
         assert token == "one-time-recording-token"
         self.credential_name = name
 
-    def stop_extension_recording(self, recording_id, token):
+    def stop_extension_recording(self, recording_id, token, *, enqueue_analysis=False):
         assert token == "one-time-recording-token"
-        self.recording["status"] = "recorded"
+        self.recording["status"] = "analyzing" if enqueue_analysis else "recorded"
         return self.recording
 
     def get_recording(self, recording_id):
@@ -160,7 +160,8 @@ def test_extension_api_separates_evidence_and_plaintext_credential():
     assert started.status_code == 200
     assert events.status_code == 202
     assert credential.status_code == 202
-    assert stopped.status_code == 200
+    assert stopped.status_code == 202
+    assert stopped.json()["status"] == "analyzing"
     assert "raw-private-token" not in stopped.text
     assert "one-time-recording-token" not in stopped.text
 

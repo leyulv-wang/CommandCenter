@@ -5,6 +5,7 @@ from typing import Any
 from app.command_center.model import StructuredModel
 from app.command_center.schemas import (
     APIAttributionAnalysis,
+    BrowserSkillDefinition,
     DemonstrationAnalysis,
     FieldMappingAnalysis,
     SkillDefinition,
@@ -145,6 +146,41 @@ class AgentSuite:
             ),
             {"skill": skill},
         )
+
+    def compile_browser_skill(
+        self,
+        trace: Any,
+        allowed_origins: list[str],
+    ) -> BrowserSkillDefinition:
+        """Distill a UI-only demonstration without inventing page evidence."""
+        skill = self.model.generate(
+            BrowserSkillDefinition,
+            (
+                "你是企业浏览器操作 Skill 编译智能体。仅根据已脱敏的 UI 事件生成候选步骤，"
+                "每一步必须引用真实存在的 source_ui_event_id，并复用该事件已有的语义定位信息。"
+                "不得猜测 CSS/XPath、凭据、隐藏页面状态或未录制操作。"
+                "输入、选择和点击的业务含义由上下文判断；无法判断副作用时标记 unknown。"
+                "该候选只用于后续隔离浏览器验证，不得宣称已经验证或发布。"
+            ),
+            {"trace": trace, "allowed_origins": allowed_origins},
+        )
+        trace_payload = _as_payload(trace)
+        known_events = {
+            str(item["event_id"]): item
+            for item in trace_payload.get("ui_events", [])
+            if isinstance(item, dict) and item.get("event_id")
+        }
+        if str(skill.source_recording_id) != str(trace_payload.get("recording_id")):
+            raise ValueError("browser skill references a different recording")
+        if set(skill.allowed_origins) - set(allowed_origins):
+            raise ValueError("browser skill references an origin outside the recording profile")
+        for step in skill.steps:
+            event = known_events.get(str(step.source_ui_event_id))
+            if event is None:
+                raise ValueError("browser skill references an unknown UI event")
+            if step.action != event.get("action_type"):
+                raise ValueError("browser skill action conflicts with recorded evidence")
+        return skill.model_copy(update={"status": "candidate", "execution_mode": "browser"})
 
     def verify_result(
         self,

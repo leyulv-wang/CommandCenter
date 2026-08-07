@@ -147,18 +147,27 @@ def create_router(service_provider: Callable[[], Any]) -> APIRouter:
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    @router.post("/recordings/{recording_id}/extension/stop")
+    @router.post(
+        "/recordings/{recording_id}/extension/stop",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
     def stop_extension_recording(
         recording_id: UUID,
         recording_token: str = Header(alias="X-CommandCenter-Recording-Token"),
         service: Any = Depends(service_provider),
     ):
         try:
-            return service.stop_extension_recording(recording_id, recording_token)
+            return service.stop_extension_recording(
+                recording_id,
+                recording_token,
+                enqueue_analysis=True,
+            )
         except PermissionError as exc:
             raise HTTPException(status_code=401, detail="recording authorization failed") from exc
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="recording not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post(
         "/recordings/{recording_id}/stop",

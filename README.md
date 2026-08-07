@@ -41,6 +41,20 @@ conda create -n langgraph python=3.11 -y
 conda run -n langgraph python -m pip install -r requirements.txt
 ```
 
+也可以使用 uv 创建项目级虚拟环境：
+
+```powershell
+uv venv .venv --python 3.12
+uv pip install --python .venv\Scripts\python.exe -r requirements.txt
+.venv\Scripts\python.exe -m pytest -q
+```
+
+使用 uv 环境启动后端：
+
+```powershell
+.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
 安装前端依赖：
 
 ```powershell

@@ -2,7 +2,10 @@
 .env.*
 !.env.example
 !.env.ai.example
+.venv/
 .run/
+.tmp/
+app/data/command_center_evidence/
 *.log
 __pycache__/
 .pytest_cache/

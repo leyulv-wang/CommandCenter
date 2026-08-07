@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "CommandCenter 只读观察器",
-  "version": "0.1.0",
+  "version": "0.3.2",
   "description": "开发测试用的选中标签页只读观察器。",
-  "permissions": ["activeTab", "debugger"],
+  "permissions": ["activeTab", "storage"],
+  "optional_permissions": ["debugger"],
   "host_permissions": [
     "http://yifeng.dtsum.com/*",
     "http://127.0.0.1:8000/*"

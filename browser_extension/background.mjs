@@ -9,9 +9,64 @@ const PROFILE_ORIGIN = 'http://yifeng.dtsum.com';
 const COMMAND_CENTER_ORIGIN = 'http://127.0.0.1:8000';
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_BUFFERED_EVENTS = 500;
+const SESSION_STATE_KEY = 'commandCenterSessionState';
+const SESSION_STATE_VERSION = 4;
 const STATIC_RESOURCE_TYPES = new Set(['Font', 'Image', 'Manifest', 'Media', 'Script', 'Stylesheet']);
 let capture = null;
 let lastLearningResult = null;
+let storageWrite = Promise.resolve();
+let stopPromise = null;
+
+export function sessionStateSnapshot(activeCapture, learningResult) {
+  return {
+    version: SESSION_STATE_VERSION,
+    capture: activeCapture ? {
+      tabId: activeCapture.tabId,
+      origin: activeCapture.origin,
+      id: activeCapture.id,
+      recordingId: activeCapture.recordingId,
+      recordingToken: activeCapture.recordingToken,
+      events: Array.isArray(activeCapture.events)
+        ? activeCapture.events.slice(-MAX_BUFFERED_EVENTS)
+        : [],
+      paused: Boolean(activeCapture.paused),
+      stopping: Boolean(activeCapture.stopping),
+      networkCapture: Boolean(activeCapture.networkCapture),
+      fingerprintKey: activeCapture.fingerprintKey,
+      clientSequence: Number.isInteger(activeCapture.clientSequence)
+        ? activeCapture.clientSequence
+        : 0,
+      droppedEvents: Number.isInteger(activeCapture.droppedEvents)
+        ? activeCapture.droppedEvents
+        : 0,
+    } : null,
+    lastLearningResult: learningResult ? {
+      recording_id: learningResult.recording_id,
+      status: learningResult.status,
+    } : null,
+  };
+}
+
+function validStoredCapture(value) {
+  if (!value || !Number.isInteger(value.tabId) || value.tabId < 0) return null;
+  if (exactOrigin(value.origin) !== PROFILE_ORIGIN) return null;
+  for (const key of ['id', 'recordingId', 'recordingToken', 'fingerprintKey']) {
+    if (typeof value[key] !== 'string' || !value[key]) return null;
+  }
+  return sessionStateSnapshot(value, null).capture;
+}
+
+function persistSessionState() {
+  if (!chromeApi?.storage?.session) return Promise.resolve();
+  if (typeof chromeApi.storage.session.set !== 'function') {
+    return Promise.reject(new Error('当前浏览器不支持扩展会话存储。'));
+  }
+  const snapshot = sessionStateSnapshot(capture, lastLearningResult);
+  storageWrite = storageWrite
+    .catch(() => {})
+    .then(() => chromeApi.storage.session.set({ [SESSION_STATE_KEY]: snapshot }));
+  return storageWrite;
+}
 
 function recordingHeaders(session) {
   return {
@@ -65,6 +120,9 @@ export function createRecordingApi(fetchImpl = fetch, baseUrl = COMMAND_CENTER_O
       return requireJson(await request(`/recordings/${session.recordingId}/extension/stop`, {
         method: 'POST', headers: recordingHeaders(session),
       }));
+    },
+    async status(session) {
+      return requireJson(await request(`/recordings/${session.recordingId}`));
     },
   };
 }
@@ -137,8 +195,10 @@ async function recordedUiEvent(raw, sender) {
 }
 
 function recordedNetworkEvent(raw) {
-  const completed = new Date();
-  const started = new Date(completed.getTime() - Math.max(0, Number(raw.durationMs) || 0));
+  const parsedCompleted = new Date(raw.completedAt ?? Date.now());
+  const completed = Number.isNaN(parsedCompleted.getTime()) ? new Date() : parsedCompleted;
+  const parsedStarted = new Date(raw.startedAt ?? completed.getTime() - Math.max(0, Number(raw.durationMs) || 0));
+  const started = Number.isNaN(parsedStarted.getTime()) ? completed : parsedStarted;
   return {
     exchange_id: crypto.randomUUID(),
     client_sequence: nextClientSequence(),
@@ -169,6 +229,7 @@ async function uploadPendingEvidence() {
   });
   capture.events.splice(0, events.length);
   capture.droppedEvents = 0;
+  await persistSessionState();
 }
 
 function headerValue(headers, wantedName) {
@@ -241,6 +302,27 @@ export function createNetworkObserver(adapter, options = {}) {
       await adapter.enableNetwork(tabId);
     } catch (error) {
       await adapter.detach(tabId).catch(() => {});
+      clearSessionState();
+      selected = null;
+      paused = true;
+      throw error;
+    }
+    selected = { tabId, origin };
+    paused = false;
+    return currentStatus();
+  }
+
+  async function restoreTab(tabId, origin) {
+    if (!Number.isInteger(tabId) || tabId < 0 || exactOrigin(origin) !== allowedOrigin) {
+      throw new Error('The stored tab must use the allowed origin.');
+    }
+    clearSessionState();
+    const alreadyAttached = await adapter.isAttached?.(tabId) ?? false;
+    if (!alreadyAttached) await adapter.attach(tabId);
+    try {
+      await adapter.enableNetwork(tabId);
+    } catch (error) {
+      if (!alreadyAttached) await adapter.detach(tabId).catch(() => {});
       clearSessionState();
       selected = null;
       paused = true;
@@ -324,7 +406,8 @@ export function createNetworkObserver(adapter, options = {}) {
       origin: url.origin,
       path: url.path,
       queryParameterNames: url.queryParameterNames,
-      startedAt: Number.isFinite(params.timestamp) ? params.timestamp : null,
+      startedAt: new Date().toISOString(),
+      monotonicStartedAt: Number.isFinite(params.timestamp) ? params.timestamp : null,
       resourceType: params.type ?? null,
       requestFingerprint,
       requestWasJson: bodySummary.json,
@@ -364,7 +447,8 @@ export function createNetworkObserver(adapter, options = {}) {
     state.response = {
       origin: url.origin,
       status: Number.isInteger(params.response?.status) ? params.response.status : null,
-      receivedAt: Number.isFinite(params.timestamp) ? params.timestamp : null,
+      receivedAt: new Date().toISOString(),
+      monotonicReceivedAt: Number.isFinite(params.timestamp) ? params.timestamp : null,
       mimeType: String(params.response?.mimeType ?? '').split(';', 1)[0].trim().toLowerCase(),
       contentDisposition: headerValue(params.response?.headers, 'content-disposition'),
       contentLengths: valuesFor('content-length'),
@@ -389,7 +473,10 @@ export function createNetworkObserver(adapter, options = {}) {
         responseFingerprint = await hmacFingerprint(rawBody, fingerprintKey);
       }
     }
-    const completedAt = Number.isFinite(params.timestamp) ? params.timestamp : state.response.receivedAt;
+    const monotonicCompletedAt = Number.isFinite(params.timestamp)
+      ? params.timestamp
+      : state.response.monotonicReceivedAt;
+    const completedAt = new Date().toISOString();
     buffer({
       type: 'network',
       method: state.method,
@@ -398,8 +485,8 @@ export function createNetworkObserver(adapter, options = {}) {
       queryParameterNames: state.queryParameterNames,
       startedAt: state.startedAt,
       completedAt,
-      durationMs: Number.isFinite(state.startedAt) && Number.isFinite(completedAt)
-        ? Math.max(0, Math.round((completedAt - state.startedAt) * 1000))
+      durationMs: Number.isFinite(state.monotonicStartedAt) && Number.isFinite(monotonicCompletedAt)
+        ? Math.max(0, Math.round((monotonicCompletedAt - state.monotonicStartedAt) * 1000))
         : null,
       status: state.response.status,
       resourceType: state.resourceType,
@@ -460,6 +547,7 @@ export function createNetworkObserver(adapter, options = {}) {
     handleDebuggerDetach,
     handleDebuggerEvent,
     handleTabUpdated,
+    restoreTab,
     status: currentStatus,
   };
 }
@@ -469,6 +557,10 @@ function chromeAdapter(chromeApi) {
   return {
     attach: (tabId) => chromeApi.debugger.attach(target(tabId), '1.3'),
     detach: (tabId) => chromeApi.debugger.detach(target(tabId)),
+    async isAttached(tabId) {
+      const targets = await chromeApi.debugger.getTargets();
+      return targets.some((item) => item.tabId === tabId && item.attached);
+    },
     enableNetwork: (tabId) => chromeApi.debugger.sendCommand(target(tabId), 'Network.enable', {
       maxPostDataSize: MAX_BODY_BYTES,
     }),
@@ -497,9 +589,54 @@ const chromeApi = chrome;
 const networkObserver = chromeApi ? createNetworkObserver(chromeAdapter(chromeApi), {
   allowedOrigin: PROFILE_ORIGIN,
   onPaused: () => {
-    if (capture) capture.paused = true;
+    if (capture) {
+      capture.paused = true;
+      void persistSessionState();
+    }
   },
 }) : null;
+
+async function restoreSessionState() {
+  if (!chromeApi?.storage?.session || !networkObserver) return;
+  const stored = await chromeApi.storage.session.get(SESSION_STATE_KEY);
+  const state = stored?.[SESSION_STATE_KEY];
+  lastLearningResult = state?.lastLearningResult ?? null;
+  const restored = state?.version === SESSION_STATE_VERSION
+    ? validStoredCapture(state?.capture)
+    : null;
+  if (!restored) {
+    capture = null;
+    await persistSessionState();
+    return;
+  }
+  try {
+    const tab = await chromeApi.tabs.get(restored.tabId);
+    if (tabOrigin(tab) !== restored.origin) throw new Error('The recorded tab is no longer available.');
+    capture = restored;
+    if (restored.stopping) {
+      capture.paused = true;
+      return;
+    }
+    capture.paused = false;
+    if (restored.networkCapture) {
+      const permitted = await chromeApi.permissions.contains({ permissions: ['debugger'] });
+      if (!permitted) throw new Error('Stored API observation permission is no longer available.');
+      await networkObserver.restoreTab(restored.tabId, restored.origin);
+    }
+    await chromeApi.tabs.sendMessage(restored.tabId, {
+      type: MESSAGE_TYPES.START_CAPTURE,
+      session: { tabId: restored.tabId, origin: restored.origin, id: restored.id },
+    }).catch(() => {});
+    await persistSessionState();
+  } catch {
+    capture = { ...restored, paused: true };
+    await persistSessionState();
+  }
+}
+
+const captureReady = chromeApi
+  ? restoreSessionState().catch(() => { capture = null; })
+  : Promise.resolve();
 
 export async function attachToTab(tabId, origin = capture?.origin) {
   if (!networkObserver) throw new Error('Chrome debugger is unavailable.');
@@ -508,6 +645,14 @@ export async function attachToTab(tabId, origin = capture?.origin) {
 
 export async function detachFromTab(tabId) {
   return networkObserver?.detachFromTab(tabId);
+}
+
+async function forceDetachFromTab(tabId) {
+  await detachFromTab(tabId).catch(() => {});
+  if (!Number.isInteger(tabId) || !chromeApi?.debugger?.getTargets) return;
+  const targets = await chromeApi.debugger.getTargets();
+  const stillAttached = targets.some((item) => item.tabId === tabId && item.attached);
+  if (stillAttached) await chromeApi.debugger.detach({ tabId }).catch(() => {});
 }
 
 export async function flushBatch() {
@@ -521,23 +666,41 @@ export async function handoffCredential(name, value) {
 function status() {
   return capture
     ? {
-        capturing: !capture.paused,
-        paused: capture.paused,
+        capturing: !capture.paused && !capture.stopping,
+        paused: capture.paused && !capture.stopping,
+        stopping: Boolean(capture.stopping),
         tabId: capture.tabId,
         origin: capture.origin,
         eventCount: capture.events.length,
         recordingId: capture.recordingId,
         learningStatus: null,
+        captureMode: capture.networkCapture ? 'semantic_and_api' : 'semantic',
       }
     : {
         capturing: false,
         paused: false,
+        stopping: false,
         tabId: null,
         origin: null,
         eventCount: 0,
         recordingId: lastLearningResult?.recording_id ?? null,
         learningStatus: lastLearningResult?.status ?? null,
+        captureMode: null,
       };
+}
+
+async function refreshLearningResult() {
+  if (capture || !lastLearningResult?.recording_id) return;
+  if (!['recorded', 'analyzing'].includes(lastLearningResult.status)) return;
+  try {
+    const current = await recordingApi.status({
+      recordingId: lastLearningResult.recording_id,
+    });
+    lastLearningResult = current;
+    await persistSessionState();
+  } catch {
+    // Status polling is best effort; the saved recording remains available.
+  }
 }
 
 function isTrustedPopupSender(sender) {
@@ -556,7 +719,8 @@ function sessionFor(tab, origin) {
   return { tabId: tab.id, origin, id: crypto.randomUUID() };
 }
 
-async function startSelectedTabCapture() {
+async function startSelectedTabCapture(captureNetwork = false) {
+  await captureReady;
   if (capture) await stopCapture(capture);
   const [tab] = await chromeApi.tabs.query({ active: true, currentWindow: true });
   const origin = tabOrigin(tab);
@@ -566,83 +730,123 @@ async function startSelectedTabCapture() {
 
   const session = sessionFor(tab, origin);
   try {
-    await attachToTab(tab.id, origin);
+    if (captureNetwork) await attachToTab(tab.id, origin);
     const backendSession = await recordingApi.start();
     capture = {
       ...session,
       ...backendSession,
       events: [],
       paused: false,
+      stopping: false,
+      networkCapture: Boolean(captureNetwork),
       fingerprintKey: crypto.randomUUID(),
       clientSequence: 0,
       droppedEvents: 0,
     };
     lastLearningResult = null;
+    await persistSessionState();
     await chromeApi.tabs.sendMessage(tab.id, { type: MESSAGE_TYPES.START_CAPTURE, session });
   } catch (error) {
-    await detachFromTab(tab.id).catch(() => {});
+    if (captureNetwork) await detachFromTab(tab.id).catch(() => {});
     capture = null;
+    await persistSessionState();
     throw error;
   }
   return status();
 }
 
-async function stopCapture(expectedCapture = capture) {
+async function stopCaptureOnce(expectedCapture = capture) {
+  await captureReady;
   if (!expectedCapture || capture !== expectedCapture) return status();
   let result = null;
   try {
+    expectedCapture.stopping = true;
+    expectedCapture.paused = true;
+    await persistSessionState();
     await chromeApi.tabs.sendMessage(expectedCapture.tabId, {
       type: MESSAGE_TYPES.STOP_CAPTURE,
       sessionId: expectedCapture.id,
     }).catch(() => {});
-    await flushBatch();
+    if (expectedCapture.networkCapture) await flushBatch();
     await uploadPendingEvidence();
-    await detachFromTab(expectedCapture.tabId).catch(() => {});
+    if (expectedCapture.networkCapture) await forceDetachFromTab(expectedCapture.tabId);
     result = await recordingApi.stop(expectedCapture);
     lastLearningResult = result;
   } catch (error) {
     lastLearningResult = failedLearningResult(expectedCapture.recordingId);
     throw error;
   } finally {
-    await detachFromTab(expectedCapture.tabId).catch(() => {});
+    if (expectedCapture.networkCapture) await forceDetachFromTab(expectedCapture.tabId);
     expectedCapture.recordingToken = null;
     if (capture === expectedCapture) capture = null;
+    await persistSessionState();
   }
   return { ...status(), learningResult: result?.learning_result ?? null };
 }
 
+async function stopCapture(expectedCapture = capture) {
+  if (stopPromise) return stopPromise;
+  const operation = stopCaptureOnce(expectedCapture);
+  stopPromise = operation;
+  try {
+    return await operation;
+  } finally {
+    if (stopPromise === operation) stopPromise = null;
+  }
+}
+
 if (chromeApi) {
   chromeApi.debugger.onEvent.addListener((source, method, params) => {
-    if (Number.isInteger(source.tabId)) void networkObserver.handleDebuggerEvent(source.tabId, method, params);
+    if (Number.isInteger(source.tabId)) {
+      void captureReady.then(() => networkObserver.handleDebuggerEvent(source.tabId, method, params));
+    }
   });
 
   chromeApi.debugger.onDetach.addListener((source) => {
-    if (Number.isInteger(source.tabId)) void networkObserver.handleDebuggerDetach(source.tabId);
+    if (Number.isInteger(source.tabId)) {
+      void captureReady
+        .then(() => networkObserver.handleDebuggerDetach(source.tabId))
+        .then(() => persistSessionState());
+    }
   });
 
-  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (!capture || tabId !== capture.tabId || (!changeInfo.url && changeInfo.status !== 'loading')) return;
-    const url = changeInfo.url ?? tab?.url;
-    void networkObserver.handleTabUpdated(tabId, url).then(() => {
-      if (capture?.tabId === tabId && networkObserver.status().paused) {
-        chromeApi.tabs.sendMessage(tabId, {
-          type: MESSAGE_TYPES.STOP_CAPTURE,
-          sessionId: capture.id,
-        }).catch(() => {});
-      }
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    void captureReady.then(async () => {
+      // A status-only loading event has no trustworthy navigation target.
+      // Chrome emits changeInfo.url separately when the top-level URL changes.
+      if (!capture || tabId !== capture.tabId || !changeInfo.url) return;
+      let nextOrigin = null;
+      try { nextOrigin = new URL(changeInfo.url).origin; } catch { /* Pause on unreadable navigation. */ }
+      if (nextOrigin === capture.origin) return;
+      if (capture.networkCapture) await networkObserver.handleTabUpdated(tabId, changeInfo.url);
+      capture.paused = true;
+      await chromeApi.tabs.sendMessage(tabId, {
+        type: MESSAGE_TYPES.STOP_CAPTURE,
+        sessionId: capture.id,
+      }).catch(() => {});
+      await persistSessionState();
     });
   });
 
   chrome.tabs.onRemoved.addListener((tabId) => {
-    if (capture?.tabId === tabId) void stopCapture(capture);
+    void captureReady.then(() => {
+      if (capture?.tabId === tabId) return stopCapture(capture);
+      return undefined;
+    });
   });
 
   chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
+      await captureReady;
       if (isPopupControlMessage(message)) {
         if (!isTrustedPopupSender(sender)) throw new Error('Only this extension popup may control capture.');
-        if (message.type === MESSAGE_TYPES.GET_STATUS) return status();
-        if (message.type === MESSAGE_TYPES.START_CAPTURE) return startSelectedTabCapture();
+        if (message.type === MESSAGE_TYPES.GET_STATUS) {
+          await refreshLearningResult();
+          return status();
+        }
+        if (message.type === MESSAGE_TYPES.START_CAPTURE) {
+          return startSelectedTabCapture(message.captureNetwork === true);
+        }
         return stopCapture();
       }
 
@@ -660,10 +864,15 @@ if (chromeApi) {
           } else {
             capture.droppedEvents++;
           }
+          await persistSessionState();
         }
       }
       return status();
-    })().then(sendResponse, (error) => sendResponse({ error: error.message, ...status() }));
+    })().then(sendResponse, (error) => {
+      const message = error instanceof Error ? error.message : 'Unknown extension error.';
+      console.error('CommandCenter extension request failed:', message);
+      sendResponse({ error: message, ...status() });
+    });
     return true;
   });
 }

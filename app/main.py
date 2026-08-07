@@ -410,6 +410,7 @@ def build_command_center_components(
         extension_recorder=extension_recorder,
         system_profiles=profiles,
         learning_graph_factory=learning_graph_factory,
+        browser_skill_distiller=agents,
     )
     return CommandCenterComponents(
         profiles=profiles,

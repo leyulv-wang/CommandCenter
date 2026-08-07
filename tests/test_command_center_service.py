@@ -1,4 +1,6 @@
 from datetime import UTC, datetime
+from threading import Event
+from time import monotonic, sleep
 from uuid import uuid4
 
 from pydantic import SecretStr
@@ -239,8 +241,9 @@ def test_service_lists_only_safe_recent_recording_fields(tmp_path):
         "capture_source",
         "created_at",
         "updated_at",
-        "failure_reasons",
-    }
+            "failure_reasons",
+            "analysis_stage",
+        }
     assert "must-not-leak" not in str(listed)
 
 
@@ -336,3 +339,121 @@ def test_service_extension_recording_never_persists_token_or_credential(tmp_path
     assert persisted["trace"]["capture_source"] == "browser_extension"
     assert "raw-private-token" not in str(persisted)
     assert token not in str(persisted)
+
+
+def test_extension_analysis_queue_returns_before_learning_finishes(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    started = Event()
+    release = Event()
+
+    class BlockingGraph:
+        def invoke(self, state):
+            started.set()
+            assert release.wait(timeout=5)
+            return {"final_status": "verified_candidate"}
+
+    class ClearableExtension:
+        def clear_credentials(self, recording_id):
+            self.cleared = recording_id
+
+    extension = ClearableExtension()
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+        extension_recorder=extension,
+        learning_graph_factory=lambda _system_code, _recording_id: BlockingGraph(),
+    )
+    created = service.create_recording(
+        CreateRecordingRequest(
+            objective="查询订单",
+            source_system="mes",
+            source_task_id="manual-demo",
+            capture_source="browser_extension",
+        )
+    )
+    recording = repository.get_recording(created["recording_id"])
+    recording.update({"status": "recorded", "trace": {"ui_events": []}})
+    repository.save_recording(created["recording_id"], recording)
+
+    queued = service.enqueue_extension_analysis(created["recording_id"])
+
+    assert queued["status"] == "analyzing"
+    assert started.wait(timeout=2)
+    assert repository.get_recording(created["recording_id"])["status"] == "analyzing"
+    release.set()
+    deadline = monotonic() + 3
+    while monotonic() < deadline:
+        current = repository.get_recording(created["recording_id"])
+        if current["status"] == "verified_candidate":
+            break
+        sleep(0.01)
+    assert current["analysis_stage"] == "completed"
+    assert extension.cleared is not None
+
+
+def test_ui_only_trace_becomes_browser_candidate_without_api_verification(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+
+    class BrowserDistiller:
+        def compile_browser_skill(self, trace, allowed_origins):
+            self.origins = allowed_origins
+            return {
+                "name": "查询订单",
+                "execution_mode": "browser",
+                "status": "candidate",
+                "source_recording_id": trace["recording_id"],
+                "steps": [{"action": "click"}],
+            }
+
+    class ClearableExtension:
+        def clear_credentials(self, recording_id):
+            self.cleared = recording_id
+
+    distiller = BrowserDistiller()
+    extension = ClearableExtension()
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+        extension_recorder=extension,
+        learning_graph_factory=lambda _system_code, _recording_id: FailingGraph(),
+        browser_skill_distiller=distiller,
+    )
+    created = service.create_recording(
+        CreateRecordingRequest(
+            objective="查询订单",
+            source_system="mes",
+            source_task_id="manual-demo",
+            capture_source="browser_extension",
+        )
+    )
+    recording = repository.get_recording(created["recording_id"])
+    recording.update(
+        {
+            "status": "recorded",
+            "trace": {
+                "recording_id": created["recording_id"],
+                "ui_events": [
+                    {
+                        "event_id": str(uuid4()),
+                        "action_type": "click",
+                        "page_url": "https://mes.example.test/orders",
+                    }
+                ],
+                "api_exchanges": [],
+            },
+        }
+    )
+    repository.save_recording(created["recording_id"], recording)
+
+    result = service.analyze_extension_recording(created["recording_id"])
+
+    assert result["status"] == "browser_candidate"
+    assert result["analysis_stage"] == "awaiting_browser_verification"
+    assert result["learning_result"]["execution_mode"] == "browser"
+    assert result["learning_result"]["verification_status"] == "pending_isolated_browser"
+    assert distiller.origins == ["https://mes.example.test"]
+    assert extension.cleared is not None

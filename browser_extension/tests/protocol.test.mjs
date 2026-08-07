@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildUIEvent } from '../shared/protocol.mjs';
+import { buildUIEvent, captureStatusText } from '../shared/protocol.mjs';
+
+test('stopped capture reports API analysis without claiming browser recording', () => {
+  assert.equal(
+    captureStatusText({ stopping: true }),
+    '录制已停止，智能体正在通过只读 API 分析和验证',
+  );
+});
 
 test('password controls never carry values', () => {
   const event = buildUIEvent({

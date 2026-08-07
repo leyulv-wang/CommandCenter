@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from fastapi.encoders import jsonable_encoder
@@ -25,6 +27,7 @@ class CommandCenterService:
         extension_recorder: Any | None = None,
         system_profiles: dict[str, Any] | None = None,
         learning_graph_factory: Any | None = None,
+        browser_skill_distiller: Any | None = None,
     ):
         self.repository = repository
         self.recorder = recorder
@@ -33,6 +36,9 @@ class CommandCenterService:
         self.extension_recorder = extension_recorder
         self.system_profiles = system_profiles or {}
         self.learning_graph_factory = learning_graph_factory
+        self.browser_skill_distiller = browser_skill_distiller
+        self._analysis_lock = threading.Lock()
+        self._active_analyses: set[UUID] = set()
 
     def create_recording(self, request: Any) -> dict[str, Any]:
         recording_id = uuid4()
@@ -187,7 +193,22 @@ class CommandCenterService:
         self,
         recording_id: UUID | str,
         token: str,
+        *,
+        enqueue_analysis: bool = False,
     ) -> dict[str, Any]:
+        recording = self.finalize_extension_recording(recording_id, token)
+        if self.learning_graph_factory is None:
+            return recording
+        if enqueue_analysis:
+            return self.enqueue_extension_analysis(recording_id)
+        return self.analyze_extension_recording(recording_id)
+
+    def finalize_extension_recording(
+        self,
+        recording_id: UUID | str,
+        token: str,
+    ) -> dict[str, Any]:
+        """Finalize and persist evidence without waiting for model analysis."""
         identifier = UUID(str(recording_id))
         recording = self.repository.get_recording(identifier)
         if self.extension_recorder is None:
@@ -198,28 +219,131 @@ class CommandCenterService:
             retain_credentials=self.learning_graph_factory is not None,
         )
         recording["trace"] = trace.model_dump(mode="json")
+        recording["status"] = "recorded"
+        recording["analysis_stage"] = "recorded"
+        self._save_recording(identifier, recording)
         if self.learning_graph_factory is None:
-            recording["status"] = "recorded"
+            self.extension_recorder.clear_credentials(identifier)
+        return recording
+
+    def enqueue_extension_analysis(
+        self,
+        recording_id: UUID | str,
+    ) -> dict[str, Any]:
+        """Persist a queued state and run learning after the stop response returns."""
+        identifier = UUID(str(recording_id))
+        with self._analysis_lock:
+            if identifier in self._active_analyses:
+                return self.repository.get_recording(identifier)
+            recording = self.repository.get_recording(identifier)
+            if recording.get("status") != "recorded":
+                raise ValueError("recording is not ready for analysis")
+            self._active_analyses.add(identifier)
+            recording["status"] = "analyzing"
+            recording["analysis_stage"] = "queued"
+            recording["analysis_queued_at"] = datetime.now(UTC).isoformat()
             self._save_recording(identifier, recording)
+
+        worker = threading.Thread(
+            target=self._run_queued_extension_analysis,
+            args=(identifier,),
+            name=f"recording-analysis-{identifier}",
+            daemon=True,
+        )
+        worker.start()
+        return recording
+
+    def _run_queued_extension_analysis(self, recording_id: UUID) -> None:
+        try:
+            self.analyze_extension_recording(recording_id)
+        except Exception:
+            # analyze_extension_recording persists a safe terminal result.
+            logger.exception("Queued analysis crashed for recording %s", recording_id)
+        finally:
+            with self._analysis_lock:
+                self._active_analyses.discard(recording_id)
+
+    def analyze_extension_recording(
+        self,
+        recording_id: UUID | str,
+    ) -> dict[str, Any]:
+        identifier = UUID(str(recording_id))
+        recording = self.repository.get_recording(identifier)
+        if self.extension_recorder is None:
+            raise ValueError("browser extension recorder is not configured")
+        if self.learning_graph_factory is None:
             self.extension_recorder.clear_credentials(identifier)
             return recording
+
         recording["status"] = "analyzing"
+        recording["analysis_stage"] = "learning"
+        recording["analysis_started_at"] = datetime.now(UTC).isoformat()
         self._save_recording(identifier, recording)
-        graph = self.learning_graph_factory(
-            str(recording["source_system"]), identifier
-        )
         try:
-            result = graph.invoke(
-                {"recording_id": str(identifier), "trace": recording["trace"]}
+            trace = recording["trace"]
+            if not trace.get("api_exchanges") and self.browser_skill_distiller is not None:
+                result = self._compile_browser_candidate(recording)
+            else:
+                graph = self.learning_graph_factory(
+                    str(recording["source_system"]), identifier
+                )
+                result = graph.invoke(
+                    {"recording_id": str(identifier), "trace": trace}
+                )
+                if (
+                    result.get("final_status") == "rejected"
+                    and self.browser_skill_distiller is not None
+                ):
+                    result = self._compile_browser_candidate(recording)
+            recording["status"] = str(result.get("final_status", "rejected"))
+            recording["learning_result"] = jsonable_encoder(result)
+            recording["analysis_stage"] = (
+                "awaiting_browser_verification"
+                if recording["status"] == "browser_candidate"
+                else "completed"
             )
+            if result.get("failure_reasons"):
+                recording["failure_reasons"] = result["failure_reasons"]
+            else:
+                recording.pop("failure_reasons", None)
+        except Exception:
+            logger.exception("Learning graph failed for recording %s", identifier)
+            recording["status"] = "needs_reteach"
+            recording["analysis_stage"] = "failed"
+            recording["failure_stage"] = "system"
+            recording["failure_reasons"] = [
+                "后台分析失败；录制证据已经保存，可以稍后重新分析。"
+            ]
         finally:
+            recording["analysis_finished_at"] = datetime.now(UTC).isoformat()
+            self._save_recording(identifier, recording)
             self.extension_recorder.clear_credentials(identifier)
-        recording["status"] = str(result.get("final_status", "rejected"))
-        recording["learning_result"] = jsonable_encoder(result)
-        if result.get("failure_reasons"):
-            recording["failure_reasons"] = result["failure_reasons"]
-        self._save_recording(identifier, recording)
         return recording
+
+    def _compile_browser_candidate(
+        self,
+        recording: dict[str, Any],
+    ) -> dict[str, Any]:
+        trace = recording["trace"]
+        origins = sorted(
+            {
+                f"{parsed.scheme}://{parsed.netloc}"
+                for event in trace.get("ui_events", [])
+                if (parsed := urlsplit(str(event.get("page_url", ""))))
+                and parsed.scheme in {"http", "https"}
+                and parsed.netloc
+            }
+        )
+        if not origins:
+            raise ValueError("browser recording does not contain an allowed page origin")
+        candidate = self.browser_skill_distiller.compile_browser_skill(trace, origins)
+        return {
+            "recording_id": str(recording["recording_id"]),
+            "final_status": "browser_candidate",
+            "execution_mode": "browser",
+            "verification_status": "pending_isolated_browser",
+            "candidate_skill": jsonable_encoder(candidate),
+        }
 
     def get_recording(self, recording_id: UUID | str) -> dict[str, Any]:
         return self.repository.get_recording(UUID(str(recording_id)))
@@ -250,6 +374,7 @@ class CommandCenterService:
             "created_at",
             "updated_at",
             "failure_reasons",
+            "analysis_stage",
         )
         return [
             {

@@ -383,6 +383,60 @@ class SkillInput(BaseModel):
     source_hint: str | None = None
 
 
+class BrowserLocator(BaseModel):
+    role: str | None = None
+    accessible_name: str | None = None
+    label: str | None = None
+    input_type: str | None = None
+    selector_fingerprint: EvidenceFingerprint | None = None
+
+    @model_validator(mode="after")
+    def require_semantic_or_recorded_locator(self) -> BrowserLocator:
+        if not any(
+            (
+                self.role,
+                self.accessible_name,
+                self.label,
+                self.selector_fingerprint,
+            )
+        ):
+            raise ValueError("browser locator requires recorded semantic evidence")
+        return self
+
+
+class BrowserSkillStep(BaseModel):
+    step_id: EvidenceIdentifier
+    sequence: int = Field(ge=1)
+    action: Literal["click", "input", "select", "submit", "navigation"]
+    source_ui_event_id: UUID
+    locator: BrowserLocator
+    input_name: str | None = None
+    side_effect: Literal["read", "write", "unknown"] = "unknown"
+
+
+class BrowserSkillDefinition(BaseModel):
+    skill_id: UUID = Field(default_factory=uuid4)
+    version: int = Field(default=1, ge=1)
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    execution_mode: Literal["browser"] = "browser"
+    status: Literal["candidate", "verified_candidate", "published", "rejected"] = (
+        "candidate"
+    )
+    source_recording_id: UUID
+    allowed_origins: list[str] = Field(min_length=1)
+    inputs: list[SkillInput] = Field(default_factory=list)
+    steps: list[BrowserSkillStep] = Field(min_length=1)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def require_ordered_steps(self) -> BrowserSkillDefinition:
+        sequences = [step.sequence for step in self.steps]
+        if sequences != list(range(1, len(self.steps) + 1)):
+            raise ValueError("browser skill steps must be consecutively ordered")
+        return self
+
+
 class SkillOutput(BaseModel):
     name: str
     type: str

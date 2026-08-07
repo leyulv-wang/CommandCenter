@@ -5,7 +5,7 @@ import test from 'node:test';
 import * as backgroundModule from '../background.mjs';
 import * as protocolModule from '../shared/protocol.mjs';
 
-const { createRecordingApi } = backgroundModule;
+const { createRecordingApi, sessionStateSnapshot } = backgroundModule;
 
 
 test('backend lifecycle separates evidence, credential, and final analysis', async () => {
@@ -56,19 +56,30 @@ test('backend lifecycle separates evidence, credential, and final analysis', asy
 });
 
 
-test('capture stops page observation before requesting learning analysis', async () => {
+test('capture stops page observation and uploads evidence before queueing analysis', async () => {
   const background = await readFile(new URL('../background.mjs', import.meta.url), 'utf8');
   const stopContent = background.indexOf('type: MESSAGE_TYPES.STOP_CAPTURE', background.indexOf('async function stopCapture'));
   const analyze = background.indexOf('recordingApi.stop(expectedCapture)', background.indexOf('async function stopCapture'));
 
   assert.ok(stopContent >= 0 && analyze > stopContent);
-  assert.match(background, /await uploadPendingEvidence\(\);[\s\S]*await detachFromTab[\s\S]*recordingApi\.stop/);
+  assert.match(background, /await uploadPendingEvidence\(\);[\s\S]*recordingApi\.stop/);
+  assert.match(background, /if \(stopPromise\) return stopPromise/);
+  assert.match(background, /expectedCapture\.stopping = true;[\s\S]*persistSessionState\(\)/);
+  assert.match(background, /if \(restored\.stopping\)[\s\S]*return;/);
+  assert.match(background, /if \(expectedCapture\.networkCapture\) await forceDetachFromTab/);
 });
 
 test('popup explicitly identifies readonly mode before capture', async () => {
   const popupHtml = await readFile(new URL('../popup.html', import.meta.url), 'utf8');
+  const popupScript = await readFile(new URL('../popup.mjs', import.meta.url), 'utf8');
 
   assert.match(popupHtml, /只读模式：未录制/);
+  assert.match(popupHtml, /id="capture-error"/);
+  assert.match(popupHtml, /id="extension-version"/);
+  assert.match(popupScript, /status\?\.error/);
+  assert.match(popupScript, /if \(controlBusy\) return/);
+  assert.match(popupScript, /扩展后台未连接/);
+  assert.match(popupScript, /try \{[\s\S]*GET_STATUS[\s\S]*\} catch/);
   assert.equal(protocolModule.captureStatusText({}), '只读模式：未录制');
 });
 
@@ -81,4 +92,27 @@ test('failed upload retains a terminal result and explicit popup feedback', () =
     protocolModule.captureStatusText({ learningStatus: 'upload_failed' }),
     '录制上传失败，请查看中控',
   );
+});
+
+test('active capture survives service worker suspension in session-only storage', async () => {
+  const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
+  const snapshot = sessionStateSnapshot({
+    tabId: 7,
+    origin: 'http://yifeng.dtsum.com',
+    id: 'browser-session',
+    recordingId: 'recording-1',
+    recordingToken: 'one-time-recording-token',
+    events: [{ event_type: 'click' }],
+    paused: false,
+    fingerprintKey: 'fingerprint-key',
+    clientSequence: 3,
+    droppedEvents: 1,
+  }, null);
+
+  assert.ok(manifest.permissions.includes('storage'));
+  assert.equal(snapshot.version, 4);
+  assert.equal(snapshot.capture.recordingId, 'recording-1');
+  assert.equal(snapshot.capture.clientSequence, 3);
+  assert.deepEqual(snapshot.capture.events, [{ event_type: 'click' }]);
+  assert.equal(JSON.stringify(snapshot).includes('X-Access-Token'), false);
 });

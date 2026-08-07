@@ -7,3 +7,5 @@ python-dotenv
 httpx
 sqlalchemy
 playwright
+python-multipart
+pytest

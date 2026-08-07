@@ -7,6 +7,7 @@ export const MESSAGE_TYPES = Object.freeze({
 });
 
 export function captureStatusText(status = {}) {
+  if (status.stopping) return '录制已停止，智能体正在通过只读 API 分析和验证';
   if (status.paused) return '录制已暂停：所选标签页已离开允许的站点';
   if (status.capturing) return `正在录制（${status.eventCount} 个待上传事件）`;
   if (status.learningStatus === 'verified_candidate') {
@@ -14,6 +15,9 @@ export function captureStatusText(status = {}) {
   }
   if (status.learningStatus === 'upload_failed') {
     return '录制上传失败，请查看中控';
+  }
+  if (status.learningStatus === 'browser_candidate') {
+    return '浏览器 Skill 已生成，等待在隔离浏览器中验证';
   }
   if (status.learningStatus) return `演示处理结果：${status.learningStatus}`;
   return '只读模式：未录制';
