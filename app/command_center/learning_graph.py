@@ -45,6 +45,7 @@ class LearningState(TypedDict, total=False):
     errors: list[str]
     failure_stage: Literal["analysis", "testing"]
     failure_reasons: list[str]
+    execution_verification: str
 
 
 def build_learning_graph(dependencies: LearningDependencies):
@@ -161,6 +162,11 @@ def build_learning_graph(dependencies: LearningDependencies):
             and not result.get("unknown_side_effect", False)
         }
         rejected = passed != required
+        credentials_pending = (
+            rejected
+            and all(step.side_effect == "read" for step in skill.steps)
+            and _all_tests_blocked_only_by_missing_credentials(results, required)
+        )
         failure_reasons: list[str] = []
         if rejected:
             for result in results:
@@ -181,13 +187,22 @@ def build_learning_graph(dependencies: LearningDependencies):
                 )
         return {
             "test_results": results,
-            "final_status": "rejected" if rejected else "ready_to_publish",
+            "final_status": (
+                "api_candidate"
+                if credentials_pending
+                else "rejected" if rejected else "ready_to_publish"
+            ),
+            **(
+                {"execution_verification": "pending_system_connection"}
+                if credentials_pending
+                else {}
+            ),
             **(
                 {
                     "failure_stage": "testing",
                     "failure_reasons": failure_reasons,
                 }
-                if rejected
+                if rejected and not credentials_pending
                 else {}
             ),
         }
@@ -207,6 +222,17 @@ def build_learning_graph(dependencies: LearningDependencies):
             "final_status": "verified_candidate",
         }
 
+    def retain_api_candidate(state: LearningState) -> LearningState:
+        skill = state["candidate_skill"].model_copy(
+            update={"status": "candidate", "published_at": None}
+        )
+        dependencies.repository.save_candidate_skill(skill)
+        return {
+            "candidate_skill": skill,
+            "final_status": "api_candidate",
+            "execution_verification": "pending_system_connection",
+        }
+
     graph = StateGraph(LearningState)
     graph.add_node("segment_trace", segment_trace)
     graph.add_node("attribute_apis", attribute_apis)
@@ -215,6 +241,7 @@ def build_learning_graph(dependencies: LearningDependencies):
     graph.add_node("execute_tests", execute_tests)
     graph.add_node("publish_skill", publish)
     graph.add_node("retain_verified_candidate", retain_verified_candidate)
+    graph.add_node("retain_api_candidate", retain_api_candidate)
     graph.add_edge(START, "segment_trace")
     graph.add_conditional_edges(
         "segment_trace",
@@ -235,16 +262,38 @@ def build_learning_graph(dependencies: LearningDependencies):
     graph.add_conditional_edges(
         "execute_tests",
         lambda state: (
-            "rejected"
-            if state["final_status"] == "rejected"
+            state["final_status"]
+            if state["final_status"] in {"rejected", "api_candidate"}
             else dependencies.publish_policy
         ),
         {
             "auto_publish": "publish_skill",
             "verified_candidate": "retain_verified_candidate",
+            "api_candidate": "retain_api_candidate",
             "rejected": END,
         },
     )
     graph.add_edge("publish_skill", END)
     graph.add_edge("retain_verified_candidate", END)
+    graph.add_edge("retain_api_candidate", END)
     return graph.compile()
+
+
+def _all_tests_blocked_only_by_missing_credentials(
+    results: list[dict[str, Any]], required: set[str]
+) -> bool:
+    if {result.get("category") for result in results} != required:
+        return False
+    for result in results:
+        if result.get("status") != "failed":
+            return False
+        step_results = result.get("step_results")
+        if not isinstance(step_results, list) or not step_results:
+            return False
+        for step_result in step_results:
+            if not isinstance(step_result, dict):
+                return False
+            error = step_result.get("error")
+            if not isinstance(error, dict) or error.get("code") != "MissingCredential":
+                return False
+    return True

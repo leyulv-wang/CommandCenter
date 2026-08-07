@@ -89,6 +89,33 @@ class StagedAgents:
         ]
 
 
+class ReadOnlyFakeAgents(FakeAgents):
+    def compile_skill(self, analysis, trace, catalog):
+        payload = valid_skill_payload()
+        payload["steps"][0]["side_effect"] = "read"
+        payload["steps"][0]["idempotency_key_template"] = None
+        return SkillDefinition.model_validate(payload)
+
+
+class MissingCredentialTester:
+    def __init__(self, mixed_failure=False):
+        self.mixed_failure = mixed_failure
+
+    def run(self, skill, case):
+        code = (
+            "NetworkError"
+            if self.mixed_failure and case["category"] == "parameter_variation"
+            else "MissingCredential"
+        )
+        return {
+            "category": case["category"],
+            "status": "failed",
+            "verification": {"status": "failed", "summary": "query execution failed"},
+            "unknown_side_effect": False,
+            "step_results": [{"status": "failed", "error": {"code": code}}],
+        }
+
+
 def test_learning_graph_auto_publishes_after_three_tests_pass(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
     dependencies = LearningDependencies(
@@ -201,3 +228,41 @@ def test_real_system_policy_stops_after_readonly_tests_as_verified_candidate(tmp
     assert result["candidate_skill"].status == "verified_candidate"
     assert repository.list_published_skills() == []
     assert len(repository.list_verified_candidates()) == 1
+
+
+def test_missing_credentials_retain_readonly_api_skill_as_candidate(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    dependencies = LearningDependencies(
+        repository=repository,
+        agents=ReadOnlyFakeAgents(),
+        tester=MissingCredentialTester(),
+        catalog={"version": "test"},
+        publish_policy="verified_candidate",
+    )
+
+    result = build_learning_graph(dependencies).invoke(
+        {"recording_id": str(uuid4()), "trace": {"api_exchanges": []}}
+    )
+
+    assert result["final_status"] == "api_candidate"
+    assert result["execution_verification"] == "pending_system_connection"
+    assert result["candidate_skill"].status == "candidate"
+    assert repository.get_skill(result["candidate_skill"].skill_id).status == "candidate"
+    assert repository.list_verified_candidates() == []
+
+
+def test_mixed_execution_failures_do_not_become_api_candidate(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    dependencies = LearningDependencies(
+        repository=repository,
+        agents=ReadOnlyFakeAgents(),
+        tester=MissingCredentialTester(mixed_failure=True),
+        catalog={"version": "test"},
+        publish_policy="verified_candidate",
+    )
+
+    result = build_learning_graph(dependencies).invoke(
+        {"recording_id": str(uuid4()), "trace": {"api_exchanges": []}}
+    )
+
+    assert result["final_status"] == "rejected"
