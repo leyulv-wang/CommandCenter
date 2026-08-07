@@ -78,6 +78,31 @@ describe('CommandCenter client', () => {
     expect(String(init?.body)).not.toContain('single-use-token');
   });
 
+  it('aborts a remote extension session with a fixed safe reason code', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({ recording_id: recordingId, status: 'upload_failed' }, 202),
+    );
+    const client = createCommandCenterClient({
+      baseUrl: 'http://127.0.0.1:8000',
+      fetchImpl,
+    });
+
+    await client.abort(recordingId, 'single-use-token', 'no_uploadable_evidence');
+
+    const [input, init] = fetchImpl.mock.calls[0]!;
+    expect(new URL(String(input)).pathname).toBe(
+      `/recordings/${recordingId}/extension/abort`,
+    );
+    expect(init?.method).toBe('POST');
+    expect(new Headers(init?.headers).get('X-CommandCenter-Recording-Token')).toBe(
+      'single-use-token',
+    );
+    expect(JSON.parse(String(init?.body))).toEqual({
+      reason: 'no_uploadable_evidence',
+    });
+    expect(String(init?.body)).not.toContain('single-use-token');
+  });
+
   it('reports a safe status error without returning the response body', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()

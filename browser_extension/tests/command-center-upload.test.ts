@@ -104,6 +104,7 @@ describe('CommandCenter upload runner', () => {
         },
       ),
       stop: vi.fn(async () => ({ status: 'queued' })),
+      abort: vi.fn(),
       getStatus: vi.fn(),
     };
     const runner = createCommandCenterUploadRunner({ clientFactory: () => client });
@@ -127,6 +128,7 @@ describe('CommandCenter upload runner', () => {
         throw new Error('offline');
       }),
       stop: vi.fn(),
+      abort: vi.fn(async () => ({ status: 'upload_failed' })),
       getStatus: vi.fn(),
     };
     const runner = createCommandCenterUploadRunner({ clientFactory: () => client });
@@ -135,5 +137,58 @@ describe('CommandCenter upload runner', () => {
 
     expect((await db.events.where('trace_id').equals('tr_upload').count())).toBe(3);
     expect((await db.recordings.get('tr_upload'))?.status).toBe('failed');
+    expect(client.abort).toHaveBeenCalledWith(
+      recordingId,
+      'single-use-token',
+      'upload_failed',
+    );
+  });
+
+  it('aborts the remote session when no uploadable evidence was captured', async () => {
+    await db.recordings.put(recording());
+    const client = {
+      createRecording: vi.fn(),
+      start: vi.fn(),
+      uploadEvents: vi.fn(),
+      stop: vi.fn(),
+      abort: vi.fn(async () => ({ status: 'upload_failed' })),
+      getStatus: vi.fn(),
+    };
+    const runner = createCommandCenterUploadRunner({ clientFactory: () => client });
+
+    await expect(runner.uploadRecording('tr_upload')).rejects.toThrow(
+      'recording contains no uploadable CommandCenter evidence',
+    );
+
+    expect(client.uploadEvents).not.toHaveBeenCalled();
+    expect(client.abort).toHaveBeenCalledWith(
+      recordingId,
+      'single-use-token',
+      'no_uploadable_evidence',
+    );
+    expect((await db.recordings.get('tr_upload'))?.status).toBe('failed');
+  });
+
+  it('preserves the original upload error when remote abort also fails', async () => {
+    await db.recordings.put(recording());
+    await db.events.bulkPut(capturedEvents());
+    const client = {
+      createRecording: vi.fn(),
+      start: vi.fn(),
+      uploadEvents: vi.fn(async () => {
+        throw new Error('offline');
+      }),
+      stop: vi.fn(),
+      abort: vi.fn(async () => {
+        throw new Error('abort unavailable');
+      }),
+      getStatus: vi.fn(),
+    };
+    const runner = createCommandCenterUploadRunner({ clientFactory: () => client });
+
+    await expect(runner.uploadRecording('tr_upload')).rejects.toThrow('offline');
+
+    expect((await db.events.where('trace_id').equals('tr_upload').count())).toBe(3);
+    expect((await db.recordings.get('tr_upload'))?.last_error).toBe('offline');
   });
 });

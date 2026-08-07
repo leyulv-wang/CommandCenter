@@ -59,6 +59,7 @@ describe('CommandCenter session coordinator', () => {
       }),
       uploadEvents: vi.fn(),
       stop: vi.fn(),
+      abort: vi.fn(),
       getStatus: vi.fn(),
     };
     const startLocal = vi.fn(async () => {

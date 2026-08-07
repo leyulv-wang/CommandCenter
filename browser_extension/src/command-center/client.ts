@@ -8,6 +8,10 @@ export type CommandCenterRecordingStatus = {
   public_message?: string;
 };
 
+export type ExtensionAbortReason =
+  | 'no_uploadable_evidence'
+  | 'upload_failed';
+
 export type CommandCenterClient = {
   createRecording(input: {
     objective: string;
@@ -20,6 +24,11 @@ export type CommandCenterClient = {
     batch: CommandCenterEvidenceBatch,
   ): Promise<void>;
   stop(recordingId: string, token: string): Promise<{ status: string }>;
+  abort(
+    recordingId: string,
+    token: string,
+    reason: ExtensionAbortReason,
+  ): Promise<{ status: string }>;
   getStatus(recordingId: string): Promise<CommandCenterRecordingStatus>;
 };
 
@@ -98,6 +107,18 @@ export function createCommandCenterClient(options: {
         { method: 'POST', headers: authorizedHeaders(token) },
       );
       return { status: optionalString(response, 'status') ?? 'queued' };
+    },
+
+    async abort(recordingId, token, reason) {
+      const response = await request(
+        `/recordings/${encodeURIComponent(recordingId)}/extension/abort`,
+        {
+          method: 'POST',
+          headers: authorizedHeaders(token),
+          body: JSON.stringify({ reason }),
+        },
+      );
+      return { status: optionalString(response, 'status') ?? 'upload_failed' };
     },
 
     async getStatus(recordingId) {

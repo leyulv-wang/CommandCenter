@@ -3,6 +3,7 @@ from threading import Event
 from time import monotonic, sleep
 from uuid import uuid4
 
+import pytest
 from pydantic import SecretStr
 
 from app.command_center.repository import CommandCenterRepository
@@ -205,6 +206,67 @@ def test_service_persists_safe_extension_upload_failure(tmp_path):
     assert failed["validation_issues"] == issues
     assert extension.aborted is not None
     assert repository.get_recording(created["recording_id"]) == failed
+
+
+def test_service_aborts_extension_capture_with_fixed_safe_reason(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    extension = AbortableExtension()
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+        extension_recorder=extension,
+    )
+    created = service.create_recording(
+        CreateRecordingRequest(
+            objective="查询订单",
+            source_system="mes",
+            source_task_id="manual-demo",
+            capture_source="browser_extension",
+        )
+    )
+    recording = repository.get_recording(created["recording_id"])
+    recording["status"] = "recording"
+    repository.save_recording(created["recording_id"], recording)
+
+    failed = service.abort_extension_recording(
+        created["recording_id"], "valid-token", "no_uploadable_evidence"
+    )
+
+    assert failed["status"] == "upload_failed"
+    assert failed["failure_stage"] == "upload"
+    assert failed["failure_reasons"] == ["浏览器未采集到可用证据，请重新录制。"]
+    assert extension.aborted is not None
+
+
+def test_service_rejects_unauthorized_extension_abort_without_state_change(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+        extension_recorder=AbortableExtension(),
+    )
+    created = service.create_recording(
+        CreateRecordingRequest(
+            objective="查询订单",
+            source_system="mes",
+            source_task_id="manual-demo",
+            capture_source="browser_extension",
+        )
+    )
+    recording = repository.get_recording(created["recording_id"])
+    recording["status"] = "recording"
+    repository.save_recording(created["recording_id"], recording)
+
+    with pytest.raises(PermissionError):
+        service.abort_extension_recording(
+            created["recording_id"], "wrong-token", "upload_failed"
+        )
+
+    assert repository.get_recording(created["recording_id"])["status"] == "recording"
 
 
 def test_service_lists_only_safe_recent_recording_fields(tmp_path):

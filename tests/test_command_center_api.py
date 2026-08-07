@@ -43,6 +43,15 @@ class FakeCommandCenterService:
         self.recording["validation_issues"] = issues
         return self.recording
 
+    def abort_extension_recording(self, recording_id, token, reason):
+        if token != "one-time-recording-token":
+            raise PermissionError("extension recording authorization failed")
+        self.abort_reason = reason
+        self.recording["status"] = "upload_failed"
+        self.recording["failure_stage"] = "upload"
+        self.recording["failure_reasons"] = ["浏览器未采集到可用证据，请重新录制。"]
+        return self.recording
+
     def put_extension_credential(self, recording_id, name, secret, token):
         assert token == "one-time-recording-token"
         self.credential_name = name
@@ -218,6 +227,34 @@ def test_invalid_extension_evidence_cannot_change_state_with_bad_token():
         f"/recordings/{service.recording_id}/extension/events",
         headers={"X-CommandCenter-Recording-Token": "wrong-token"},
         json={"recording_id": str(service.recording_id), "events": []},
+    )
+
+    assert response.status_code == 401
+    assert service.recording["status"] == "recording"
+
+
+def test_extension_can_abort_empty_local_capture_with_safe_reason():
+    service = FakeCommandCenterService()
+    service.recording["status"] = "recording"
+    response = client_for(service).post(
+        f"/recordings/{service.recording_id}/extension/abort",
+        headers={"X-CommandCenter-Recording-Token": "one-time-recording-token"},
+        json={"reason": "no_uploadable_evidence"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "upload_failed"
+    assert service.abort_reason == "no_uploadable_evidence"
+    assert "recording-token" not in response.text
+
+
+def test_extension_abort_with_bad_token_keeps_recording_active():
+    service = FakeCommandCenterService()
+    service.recording["status"] = "recording"
+    response = client_for(service).post(
+        f"/recordings/{service.recording_id}/extension/abort",
+        headers={"X-CommandCenter-Recording-Token": "wrong-token"},
+        json={"reason": "upload_failed"},
     )
 
     assert response.status_code == 401

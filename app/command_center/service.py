@@ -15,6 +15,11 @@ from app.command_center.schemas import ExtensionEventBatch
 
 logger = logging.getLogger(__name__)
 
+_EXTENSION_ABORT_MESSAGES = {
+    "no_uploadable_evidence": "浏览器未采集到可用证据，请重新录制。",
+    "upload_failed": "浏览器录制证据上传失败，请稍后重试。",
+}
+
 
 class CommandCenterService:
     def __init__(
@@ -173,6 +178,31 @@ class CommandCenterService:
             "Extension evidence validation failed for recording %s: %s",
             identifier,
             issues,
+        )
+        return recording
+
+    def abort_extension_recording(
+        self,
+        recording_id: UUID | str,
+        token: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        message = _EXTENSION_ABORT_MESSAGES.get(reason)
+        if message is None:
+            raise ValueError("unsupported extension abort reason")
+        identifier = UUID(str(recording_id))
+        recording = self.repository.get_recording(identifier)
+        if self.extension_recorder is None:
+            raise ValueError("browser extension recorder is not configured")
+        self.extension_recorder.abort_authorized(identifier, token)
+        recording["status"] = "upload_failed"
+        recording["failure_stage"] = "upload"
+        recording["failure_reasons"] = [message]
+        self._save_recording(identifier, recording)
+        logger.warning(
+            "Extension recording %s aborted with safe reason code %s",
+            identifier,
+            reason,
         )
         return recording
 

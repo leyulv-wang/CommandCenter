@@ -6,6 +6,8 @@ import { createEvidenceConverter } from '@/command-center/evidence';
 import { db, type JourneyForgeDB } from '@/storage/db';
 import type { RecordingRow } from '@/shared/types';
 
+class NoUploadableEvidenceError extends Error {}
+
 const RESUMABLE_STATUSES: RecordingRow['status'][] = [
   'ready',
   'failed',
@@ -66,7 +68,9 @@ export function createCommandCenterUploadRunner(options: {
       for (const event of captured) converter.append(event);
       const batch = await converter.flush(connection.recording_id);
       if (!batch || batch.events.length === 0) {
-        throw new Error('recording contains no uploadable CommandCenter evidence');
+        throw new NoUploadableEvidenceError(
+          'recording contains no uploadable CommandCenter evidence',
+        );
       }
 
       const client = clientFactory(connection.base_url);
@@ -88,6 +92,20 @@ export function createCommandCenterUploadRunner(options: {
       });
       return current;
     } catch (error) {
+      const abortReason =
+        error instanceof NoUploadableEvidenceError
+          ? 'no_uploadable_evidence'
+          : 'upload_failed';
+      try {
+        await clientFactory(connection.base_url).abort(
+          connection.recording_id,
+          connection.recording_token,
+          abortReason,
+        );
+      } catch {
+        // Remote cleanup is best-effort. Local evidence and the original error
+        // remain authoritative for retry and diagnosis.
+      }
       await update(current, {
         status: 'failed',
         last_error: safeErrorMessage(error),

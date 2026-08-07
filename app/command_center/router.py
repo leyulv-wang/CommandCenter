@@ -21,6 +21,10 @@ class ExtensionCredentialRequest(BaseModel):
     secret: SecretStr
 
 
+class ExtensionAbortRequest(BaseModel):
+    reason: Literal["no_uploadable_evidence", "upload_failed"]
+
+
 class CreateTaskRunRequest(BaseModel):
     user_request: str = Field(min_length=1)
 
@@ -164,6 +168,32 @@ def create_router(service_provider: Callable[[], Any]) -> APIRouter:
             )
         except PermissionError as exc:
             raise HTTPException(status_code=401, detail="recording authorization failed") from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="recording not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post(
+        "/recordings/{recording_id}/extension/abort",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def abort_extension_recording(
+        recording_id: UUID,
+        request: ExtensionAbortRequest,
+        recording_token: str = Header(alias="X-CommandCenter-Recording-Token"),
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.abort_extension_recording(
+                recording_id,
+                recording_token,
+                request.reason,
+            )
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=401,
+                detail="recording authorization failed",
+            ) from exc
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="recording not found") from exc
         except ValueError as exc:
