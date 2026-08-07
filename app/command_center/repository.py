@@ -67,15 +67,27 @@ class CommandCenterRepository:
         payload: dict[str, object],
     ) -> None:
         with self.session_factory() as session:
-            session.add(
-                SkillTestRow(
-                    skill_id=str(skill_id),
-                    skill_version=version,
-                    category=category,
-                    status=status,
-                    payload_json=json.dumps(payload, ensure_ascii=False),
+            row = session.scalar(
+                select(SkillTestRow).where(
+                    SkillTestRow.skill_id == str(skill_id),
+                    SkillTestRow.skill_version == version,
+                    SkillTestRow.category == category,
                 )
             )
+            payload_json = json.dumps(payload, ensure_ascii=False)
+            if row:
+                row.status = status
+                row.payload_json = payload_json
+            else:
+                session.add(
+                    SkillTestRow(
+                        skill_id=str(skill_id),
+                        skill_version=version,
+                        category=category,
+                        status=status,
+                        payload_json=payload_json,
+                    )
+                )
             session.commit()
 
     def publish_skill(self, skill_id: UUID, version: int) -> SkillDefinition:

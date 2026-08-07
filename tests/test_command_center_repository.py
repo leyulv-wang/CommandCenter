@@ -27,6 +27,32 @@ def test_repository_publishes_only_after_all_required_tests_pass(tmp_path):
     assert repository.list_published_skills()[0].skill_id == skill.skill_id
 
 
+def test_repository_replaces_test_result_when_skill_is_reanalyzed(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    skill = SkillDefinition.model_validate(valid_skill_payload())
+    repository.save_candidate_skill(skill)
+
+    repository.save_test_result(
+        skill.skill_id,
+        skill.version,
+        "normal",
+        "failed",
+        {"summary": "first analysis"},
+    )
+    repository.save_test_result(
+        skill.skill_id,
+        skill.version,
+        "normal",
+        "passed",
+        {"summary": "reanalyzed"},
+    )
+
+    for category in ("parameter_variation", "idempotency"):
+        repository.save_test_result(skill.skill_id, skill.version, category, "passed", {})
+
+    assert repository.publish_skill(skill.skill_id, skill.version).status == "published"
+
+
 def test_published_skill_version_is_immutable(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
     skill = SkillDefinition.model_validate(valid_skill_payload())
