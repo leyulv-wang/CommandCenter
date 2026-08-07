@@ -334,6 +334,8 @@ class CommandCenterService:
         recording["status"] = "analyzing"
         recording["analysis_stage"] = "learning"
         recording["analysis_started_at"] = datetime.now(UTC).isoformat()
+        recording.pop("failure_stage", None)
+        recording.pop("failure_reasons", None)
         self._save_recording(identifier, recording)
         try:
             trace = recording["trace"]

@@ -519,6 +519,8 @@ def test_ui_only_trace_becomes_browser_candidate_without_api_verification(tmp_pa
     recording.update(
         {
             "status": "recorded",
+            "failure_stage": "system",
+            "failure_reasons": ["旧的系统失败"],
             "trace": {
                 "recording_id": created["recording_id"],
                 "ui_events": [
@@ -538,6 +540,8 @@ def test_ui_only_trace_becomes_browser_candidate_without_api_verification(tmp_pa
 
     assert result["status"] == "browser_candidate"
     assert result["analysis_stage"] == "awaiting_browser_verification"
+    assert "failure_stage" not in result
+    assert "failure_reasons" not in result
     assert result["learning_result"]["execution_mode"] == "browser"
     assert result["learning_result"]["verification_status"] == "pending_isolated_browser"
     assert distiller.origins == ["https://mes.example.test"]
