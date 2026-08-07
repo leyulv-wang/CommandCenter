@@ -6,6 +6,7 @@ import {
   setRecordingLabel,
 } from '@/recording/recorder';
 import { commandCenterSession } from '@/command-center/session';
+import { connectRecordingTab } from '@/recording/tab-connection';
 import { errorMessage } from '@/shared/errors';
 import type { CapturedEvent, CaptureSettings, RecordingRow } from '@/shared/types';
 import { db, getConfig } from '@/storage/db';
@@ -310,16 +311,28 @@ async function broadcastRecordingState(
 ): Promise<void> {
   const resolvedCaptureSettings = captureSettings === undefined ? await captureSettingsForActiveRecording(traceId, null) : captureSettings;
   const tabs = await browser.tabs.query({ url: ['http://*/*', 'https://*/*'] });
+  const message = {
+    type: 'recording-state' as const,
+    active,
+    traceId,
+    captureSettings: resolvedCaptureSettings,
+    allowedOrigins,
+  };
   await Promise.allSettled(
     tabs
-      .filter((tab) => tab.id !== undefined)
+      .filter((tab) => tab.id !== undefined && Boolean(tab.url))
       .map((tab) =>
-        browser.tabs.sendMessage(tab.id!, {
-          type: 'recording-state',
-          active,
-          traceId,
-          captureSettings: resolvedCaptureSettings,
+        connectRecordingTab({
+          tabId: tab.id!,
+          url: tab.url!,
+          message,
           allowedOrigins,
+          sendMessage: (tabId, payload) => browser.tabs.sendMessage(tabId, payload),
+          inject: (tabId) =>
+            chrome.scripting.executeScript({
+              target: { tabId, allFrames: true },
+              files: ['content-scripts/content.js'],
+            }),
         })
       )
   );
