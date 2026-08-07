@@ -49,11 +49,23 @@ Crypto SubtleCrypto 可用；仅依赖页面注入的 `fetch`/XHR 包装也不�
 - 重新分析已成功完成 Skill 编译并进入三类 Tool 测试；三个测试均因
   `MissingCredential` 失败，而不是绑定异常或系统崩溃。
 
-下一项独立工作是为真实 MES 设计显式授权、仅驻留内存的临时凭证桥。现有隐私边界不允许
-扩展静默采集 `X-Access-Token`，因此未伪造测试通过结果，也未把浏览器登录凭证写入数据库。
+## 第一条路径范围收敛与最终验收
 
-## 待验收
+当前版本只验收“页面录制 + API 证据 → 智能体对齐 → 生成 API Skill”，不实现凭据桥、
+浏览器复现或真实 MES 代执行。缺少执行凭据不代表学习失败：当候选已经成功编译，且三类
+只读测试仅被 `MissingCredential` 阻塞时，系统保留 `api_candidate`，标记
+`execution_verification=pending_system_connection`，不降级为浏览器 Skill。
 
-在 Edge 扩展管理页重新加载最新构建后，对真实 MES 只执行一次采购申请列表查询。验收标准：
-中控轨迹至少包含一个 API exchange，路径为 MES 实际发出的采购申请查询接口，并能匹配到
-允许的只读 Tool。禁止进行新增、编辑、保存、提交、审核或删除操作。
+重复分析还暴露了测试结果唯一键冲突：同一 Skill 版本、同一测试类别原先会重复插入。
+存储层现已按 `(skill_id, skill_version, category)` 更新结果，使保存的录制可以安全重分析。
+
+已保存的真实 MES 录制 `68f5c5bc-607e-47a5-9c91-3cae8df4f19f` 最终验证结果：
+
+- 状态：`api_candidate`；分析阶段：`completed`。
+- Skill：`查询采购申请列表`；候选状态：`candidate`。
+- 执行验证：`pending_system_connection`。
+- 无 `failure_stage`，无 `failure_reasons`，未生成浏览器 Skill。
+- 不需要重新操作 MES，也没有对 MES 进行写入。
+
+此结果代表第一条路径的学习闭环完成。真实调用与发布属于以后接入业务系统执行连接后的
+独立阶段，不再混入当前录制学习验收。
