@@ -41,6 +41,7 @@ def browser_bc_adapter_payload() -> dict[str, object]:
                 "method": "GET",
                 "path_template": "/jeecg-boot/purchase/apply/list",
                 "query_parameter_names": ["pageNo"],
+                "query_parameter_fingerprints": {"pageNo": [FP]},
                 "request_fingerprint": FP,
                 "response_status": 200,
                 "endpoint_fingerprint": FP,
@@ -63,6 +64,7 @@ def test_browser_bc_adapter_payload_matches_extension_contract():
     assert str(batch.recording_id) == payload["recording_id"]
     assert batch.events[0].client_sequence < batch.events[1].client_sequence
     assert batch.events[1].path_template == "/jeecg-boot/purchase/apply/list"
+    assert batch.events[1].query_parameter_fingerprints == {"pageNo": [FP]}
 
 
 def test_browser_bc_adapter_contract_rejects_raw_token_fields():

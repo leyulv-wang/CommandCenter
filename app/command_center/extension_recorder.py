@@ -135,6 +135,9 @@ class ExtensionRecorder:
                         path=item.path_template,
                         request_body={
                             "query_parameter_names": item.query_parameter_names,
+                            "query_parameter_fingerprints": (
+                                item.query_parameter_fingerprints
+                            ),
                             "request_fingerprint": item.request_fingerprint,
                             "endpoint_fingerprint": item.endpoint_fingerprint,
                         },

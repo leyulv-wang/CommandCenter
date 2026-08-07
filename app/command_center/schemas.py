@@ -196,6 +196,9 @@ class RecordedNetworkExchange(_EvidenceModel):
     ]
     path_template: EvidencePath
     query_parameter_names: list[EvidenceIdentifier] = Field(default_factory=list)
+    query_parameter_fingerprints: dict[
+        EvidenceIdentifier, list[EvidenceFingerprint]
+    ] = Field(default_factory=dict)
     request_fingerprint: EvidenceFingerprint | None = None
     response_status: int
     response_fingerprint: EvidenceFingerprint | None = None

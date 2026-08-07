@@ -156,6 +156,65 @@ def test_extension_batch_preserves_only_redacted_semantic_evidence():
     assert batch.events[0].value_fingerprint is None
 
 
+def test_extension_network_evidence_validates_query_parameter_fingerprints():
+    payload = valid_extension_batch()
+    now = datetime.now(UTC).isoformat()
+    payload["events"] = [
+        {
+            "exchange_id": str(uuid4()),
+            "client_sequence": 1,
+            "started_at": now,
+            "completed_at": now,
+            "method": "GET",
+            "path_template": "/orders",
+            "query_parameter_names": ["applyBy", "tag"],
+            "query_parameter_fingerprints": {
+                "applyBy": ["hmac-sha256:" + "a" * 64],
+                "tag": [
+                    "hmac-sha256:" + "b" * 64,
+                    "hmac-sha256:" + "c" * 64,
+                ],
+            },
+            "response_status": 200,
+        }
+    ]
+
+    batch = schemas.ExtensionEventBatch.model_validate(payload)
+
+    assert batch.events[0].query_parameter_fingerprints["applyBy"] == [
+        "hmac-sha256:" + "a" * 64
+    ]
+    assert "alice" not in batch.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "fingerprints",
+    [
+        {"bad parameter": ["hmac-sha256:" + "a" * 64]},
+        {"applyBy": ["alice"]},
+    ],
+)
+def test_extension_network_evidence_rejects_invalid_query_fingerprints(fingerprints):
+    payload = valid_extension_batch()
+    now = datetime.now(UTC).isoformat()
+    payload["events"] = [
+        {
+            "exchange_id": str(uuid4()),
+            "client_sequence": 1,
+            "started_at": now,
+            "completed_at": now,
+            "method": "GET",
+            "path_template": "/orders",
+            "query_parameter_names": ["applyBy"],
+            "query_parameter_fingerprints": fingerprints,
+            "response_status": 200,
+        }
+    ]
+
+    with pytest.raises(ValidationError):
+        schemas.ExtensionEventBatch.model_validate(payload)
+
+
 def test_extension_evidence_rejects_sensitive_raw_values():
     payload = valid_extension_batch()
     payload["events"][0]["network"] = {

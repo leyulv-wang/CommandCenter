@@ -84,6 +84,7 @@ def network_event(sequence: int = 2, path: str = "/jeecg-boot/purchase/apply/lis
         "method": "GET",
         "path_template": path,
         "query_parameter_names": ["pageNo"],
+        "query_parameter_fingerprints": {"pageNo": [FP]},
         "request_fingerprint": FP,
         "response_status": 200,
         "response_fingerprint": FP,
@@ -115,6 +116,9 @@ def test_extension_recorder_orders_events_and_matches_allowlisted_api():
     assert trace.capture_source == "browser_extension"
     assert trace.ui_events[0].sequence < trace.api_exchanges[0].sequence
     assert trace.api_exchanges[0].matched_tool_id.endswith("listPurchaseApply")
+    assert trace.api_exchanges[0].request_body["query_parameter_fingerprints"] == {
+        "pageNo": [FP]
+    }
     assert grant.token not in trace.model_dump_json()
 
 
