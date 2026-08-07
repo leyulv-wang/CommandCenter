@@ -38,6 +38,19 @@ export function profileForUrl(
   );
 }
 
+export function originAllowed(
+  url: string,
+  allowedOrigins: readonly string[],
+): boolean {
+  let origin: string;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    return false;
+  }
+  return allowedOrigins.some((candidate) => exactOrigin(candidate) === origin);
+}
+
 function exactOrigin(value: string): string | null {
   try {
     const parsed = new URL(value);

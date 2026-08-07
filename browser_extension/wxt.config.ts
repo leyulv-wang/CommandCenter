@@ -26,7 +26,7 @@ export default defineConfig({
     ],
     action: {
       default_popup: 'popup.html',
-      default_title: 'Journey Forge Local'
+      default_title: 'CommandCenter 演示观察器'
     }
   }),
   vite: () => ({

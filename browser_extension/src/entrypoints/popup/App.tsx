@@ -1,56 +1,63 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import {
+  profileForUrl,
+  type CommandCenterProfile,
+} from '@/command-center/config';
+import type { CommandCenterRecordingStatus } from '@/command-center/client';
 import { errorMessage } from '@/shared/errors';
 import { sendRuntimeMessage } from '@/shared/runtime';
-import { buildLiveTraceSummary } from '@/recording/trace-summary';
+import type { RecordingRow } from '@/shared/types';
 import { getConfig } from '@/storage/db';
 import { Alert, Badge, Button, Card, CardContent, Input } from '@/ui/primitives';
-import type { RecordingRow, TraceSummary } from '@/shared/types';
 
 type ActiveRecordingResponse = {
   active: boolean;
   traceId: string | null;
-  recovered?: boolean;
   row?: RecordingRow | null;
 };
 
-type RecordingActionResponse = {
-  active: boolean;
-  traceId: string | null;
+type RecordingActionResponse = ActiveRecordingResponse & {
   row?: RecordingRow;
 };
 
-type Stopped = {
-  row: RecordingRow;
-  summary: TraceSummary;
-};
-
-type View = 'idle' | 'recording' | 'stopped';
+type View = 'loading' | 'idle' | 'recording' | 'processing';
 
 export function PopupApp() {
-  const [view, setView] = useState<View>('idle');
-  const [endpointReady, setEndpointReady] = useState(true);
-  const [taskName, setTaskName] = useState('');
+  const [view, setView] = useState<View>('loading');
+  const [profile, setProfile] = useState<CommandCenterProfile | null>(null);
+  const [tabHost, setTabHost] = useState('未选择可录制页面');
+  const [objective, setObjective] = useState('');
   const [activeRow, setActiveRow] = useState<RecordingRow | null>(null);
-  const [liveSummary, setLiveSummary] = useState<TraceSummary | null>(null);
-  const [now, setNow] = useState(Date.now());
-  const [stopped, setStopped] = useState<Stopped | null>(null);
+  const [remoteStatus, setRemoteStatus] = useState<CommandCenterRecordingStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const stoppedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [config, active] = await Promise.all([
-        getConfig(),
-        sendRuntimeMessage<ActiveRecordingResponse>({ type: 'get-active-recording' }),
-      ]);
-      if (cancelled) return;
-      setEndpointReady(Boolean(config.endpoint_url.trim() && config.api_key.trim()));
-      if (active.active && active.row && !stoppedRef.current) {
-        setActiveRow(active.row);
-        setView('recording');
+      try {
+        const [config, active, tabs] = await Promise.all([
+          getConfig(),
+          sendRuntimeMessage<ActiveRecordingResponse>({ type: 'get-active-recording' }),
+          chrome.tabs.query({ active: true, currentWindow: true }),
+        ]);
+        if (cancelled) return;
+        const tabUrl = tabs[0]?.url ?? '';
+        const selected = profileForUrl(tabUrl, config.commandCenterProfiles);
+        setProfile(selected);
+        setTabHost(hostFor(tabUrl));
+        if (active.active && active.row) {
+          setActiveRow(active.row);
+          setObjective(active.row.envelope.label ?? '');
+          setView('recording');
+        } else {
+          setView('idle');
+        }
+      } catch (caught) {
+        if (!cancelled) {
+          setError(errorMessage(caught));
+          setView('idle');
+        }
       }
     })();
     return () => {
@@ -58,33 +65,27 @@ export function PopupApp() {
     };
   }, []);
 
-  // Poll live trace stats + elapsed timer while recording.
   useEffect(() => {
-    if (view !== 'recording') return undefined;
+    if (view !== 'processing' || !activeRow) return undefined;
     let cancelled = false;
-    const tick = async () => {
-      setNow(Date.now());
-      const active = await sendRuntimeMessage<ActiveRecordingResponse>({ type: 'get-active-recording' });
-      if (cancelled) return;
-      if (!active.active || !active.row) {
-        setView('idle');
-        setActiveRow(null);
-        return;
-      }
-      setActiveRow(active.row);
+    const poll = async () => {
       try {
-        setLiveSummary(await buildLiveTraceSummary(active.row));
+        const status = await sendRuntimeMessage<CommandCenterRecordingStatus>({
+          type: 'get-command-center-status',
+          traceId: activeRow.trace_id,
+        });
+        if (!cancelled) setRemoteStatus(status);
       } catch {
-        // Live stats are best-effort.
+        // The local upload result remains visible; polling is best-effort.
       }
     };
-    void tick();
-    const handle = setInterval(() => void tick(), 1000);
+    void poll();
+    const timer = setInterval(() => void poll(), 1_500);
     return () => {
       cancelled = true;
-      clearInterval(handle);
+      clearInterval(timer);
     };
-  }, [view]);
+  }, [view, activeRow]);
 
   async function run(action: () => Promise<void>): Promise<void> {
     setBusy(true);
@@ -99,177 +100,157 @@ export function PopupApp() {
   }
 
   function start(): void {
+    if (!profile || !objective.trim()) return;
     void run(async () => {
-      const response = await sendRuntimeMessage<RecordingActionResponse>(
-        taskName.trim() ? { type: 'start-recording', label: taskName.trim() } : { type: 'start-recording' }
-      );
-      setNotice(null);
-      setActiveRow(response.row ?? null);
-      setLiveSummary(null);
-      setNow(Date.now());
+      const response = await sendRuntimeMessage<RecordingActionResponse>({
+        type: 'start-recording',
+        label: objective.trim(),
+      });
+      if (!response.row) throw new Error('扩展未返回录制会话。');
+      setActiveRow(response.row);
+      setRemoteStatus(null);
       setView('recording');
     });
   }
 
   function stop(): void {
+    if (!activeRow) return;
     void run(async () => {
-      const traceId = activeRow?.trace_id;
-      const response = await sendRuntimeMessage<RecordingActionResponse>(
-        traceId ? { type: 'stop-recording', traceId } : { type: 'stop-recording' }
-      );
-      const row = response.row;
-      if (!row) {
-        setView('idle');
-        return;
-      }
-      stoppedRef.current = true;
-      const summary = await buildLiveTraceSummary(row);
-      setStopped({ row, summary });
-      setActiveRow(null);
-      setView('stopped');
+      const response = await sendRuntimeMessage<RecordingActionResponse>({
+        type: 'stop-recording',
+        traceId: activeRow.trace_id,
+      });
+      if (!response.row) throw new Error('扩展未返回上传结果。');
+      setActiveRow(response.row);
+      setRemoteStatus({
+        recording_id: response.row.command_center?.recording_id ?? '',
+        status: response.row.command_center?.remote_status ?? 'queued',
+      });
+      setView('processing');
     });
   }
 
-  function upload(): void {
-    if (!stopped) return;
-    void run(async () => {
-      const traceId = stopped.row.trace_id;
-      await sendRuntimeMessage<{ ok: boolean }>(
-        taskName.trim()
-          ? { type: 'resume-upload', traceId, label: taskName.trim() }
-          : { type: 'resume-upload', traceId }
-      );
-      stoppedRef.current = false;
-      setStopped(null);
-      setTaskName('');
-      setNotice('Recording uploaded.');
-      setView('idle');
-    });
+  function reset(): void {
+    setActiveRow(null);
+    setRemoteStatus(null);
+    setObjective('');
+    setView('idle');
   }
 
-  function discard(): void {
-    if (!stopped) return;
-    void run(async () => {
-      await sendRuntimeMessage<{ ok: boolean }>({ type: 'delete-recording', traceId: stopped.row.trace_id });
-      stoppedRef.current = false;
-      setStopped(null);
-      setTaskName('');
-      setNotice('Recording discarded.');
-      setView('idle');
-    });
-  }
+  const canStart =
+    view === 'idle' && Boolean(profile) && Boolean(objective.trim()) && !busy;
 
   return (
     <main className="jf-popup">
       <header className="jf-header">
-        <h1 className="jf-title">Journey Forge</h1>
-        <span className={view === 'recording' ? 'jf-dot recording' : 'jf-dot'} aria-hidden />
+        <div>
+          <p className="jf-eyebrow">COMMANDCENTER</p>
+          <h1 className="jf-title">演示观察器</h1>
+        </div>
+        <span
+          className={view === 'recording' ? 'jf-dot recording' : 'jf-dot'}
+          aria-hidden
+        />
       </header>
 
       {error ? <Alert tone="danger">{error}</Alert> : null}
 
+      <Card>
+        <CardContent>
+          <div className="jf-rec-top">
+            <span className="jf-muted">当前业务系统</span>
+            <Badge tone={profile ? 'success' : 'warning'}>
+              {profile ? '已匹配' : '不可录制'}
+            </Badge>
+          </div>
+          <strong>{profile?.displayName ?? '没有匹配的系统配置'}</strong>
+          <p className="jf-domains">{tabHost}</p>
+        </CardContent>
+      </Card>
+
+      {view === 'loading' ? <p className="jf-muted">正在读取录制状态…</p> : null}
+
       {view === 'idle' ? (
         <>
-          {notice ? <Alert tone="success">{notice}</Alert> : null}
-          {!endpointReady ? (
-            <Alert tone="warning">Set the local server endpoint and API key before recording.</Alert>
-          ) : null}
           <label className="jf-field">
-            <span>Task name (optional)</span>
+            <span>演示目标</span>
             <Input
-              value={taskName}
-              placeholder="e.g. Book a flight to Tokyo"
-              onChange={(event) => setTaskName(event.target.value)}
+              aria-label="演示目标"
+              value={objective}
+              placeholder="例如：查询采购申请"
+              onChange={(event) => setObjective(event.target.value)}
               disabled={busy}
             />
           </label>
-          <Button variant="primary" className="jf-wide" onClick={start} disabled={busy || !endpointReady}>
-            Start recording
+          <p className="jf-muted">页面操作和对应 API 会记录在同一条时间轨迹中。</p>
+          <Button
+            variant="primary"
+            className="jf-wide"
+            onClick={start}
+            disabled={!canStart}
+          >
+            开始录制
           </Button>
         </>
       ) : null}
 
       {view === 'recording' ? (
         <>
-          <Card>
-            <CardContent>
-              <div className="jf-rec-top">
-                <span className="jf-muted">Recording</span>
-                <Badge tone="danger">Live</Badge>
-              </div>
-              <div className="jf-stat-row">
-                <div className="jf-stat">
-                  <strong>{formatDuration(elapsedMs(activeRow, now))}</strong>
-                  <span>elapsed</span>
-                </div>
-                <div className="jf-stat">
-                  <strong>{liveSummary ? totalEvents(liveSummary) : 0}</strong>
-                  <span>events</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          <Button variant="danger" className="jf-wide" onClick={stop} disabled={busy}>
-            Stop
+          <Alert tone="warning">正在录制：{objective}</Alert>
+          <Button
+            variant="danger"
+            className="jf-wide"
+            onClick={stop}
+            disabled={busy}
+          >
+            停止录制并学习
           </Button>
         </>
       ) : null}
 
-      {view === 'stopped' && stopped ? (
+      {view === 'processing' ? (
         <>
-          <Card>
-            <CardContent>
-              <div className="jf-rec-top">
-                <span className="jf-muted">Recording saved</span>
-                <Badge tone="success">Ready</Badge>
-              </div>
-              <div className="jf-summary-grid">
-                <div className="jf-stat">
-                  <strong>{totalEvents(stopped.summary)}</strong>
-                  <span>events</span>
-                </div>
-                <div className="jf-stat">
-                  <strong>{stopped.summary.domains.length}</strong>
-                  <span>domains</span>
-                </div>
-                <div className="jf-stat">
-                  <strong>{formatDuration(stopped.summary.duration_ms)}</strong>
-                  <span>duration</span>
-                </div>
-              </div>
-              {stopped.summary.domains.length ? (
-                <p className="jf-domains">{stopped.summary.domains.slice(0, 6).join(', ')}</p>
-              ) : null}
-            </CardContent>
-          </Card>
-          <div className="jf-actions">
-            <Button variant="primary" onClick={upload} disabled={busy}>
-              Upload
-            </Button>
-            <Button onClick={discard} disabled={busy}>
-              Discard
-            </Button>
-          </div>
+          <Alert tone={statusTone(remoteStatus?.status)}>
+            {statusText(remoteStatus?.status)}
+          </Alert>
+          {activeRow?.command_center?.recording_id ? (
+            <p className="jf-domains">
+              录制编号：{activeRow.command_center.recording_id}
+            </p>
+          ) : null}
+          <Button className="jf-wide" onClick={reset} disabled={busy}>
+            录制下一个任务
+          </Button>
         </>
       ) : null}
     </main>
   );
 }
 
-function elapsedMs(row: RecordingRow | null, now: number): number {
-  if (!row) return 0;
-  const started = Date.parse(row.envelope.started_at);
-  if (!Number.isFinite(started)) return 0;
-  return Math.max(0, now - started);
+function hostFor(value: string): string {
+  try {
+    return new URL(value).host;
+  } catch {
+    return '无法读取当前页面地址';
+  }
 }
 
-function totalEvents(summary: TraceSummary): number {
-  return Object.values(summary.event_counts).reduce((sum, count) => sum + count, 0);
+function statusText(status: string | undefined): string {
+  const labels: Record<string, string> = {
+    queued: '证据已上传，等待智能体学习。',
+    learning: '智能体正在对齐页面操作和 API。',
+    testing: '候选 Skill 正在进行无害测试。',
+    published: 'Skill 已通过测试并发布。',
+    verified_candidate: 'API Skill 已验证。',
+    browser_candidate: '没有可靠 API，已保存为浏览器候选。',
+    needs_reteach: '本次演示未能生成 Skill，请查看中控提示。',
+    failed: '处理失败，证据仍保存在本地。',
+  };
+  return labels[status ?? ''] ?? '证据已提交，中控正在处理。';
 }
 
-function formatDuration(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+function statusTone(status: string | undefined): 'success' | 'warning' | 'danger' {
+  if (status === 'published' || status === 'verified_candidate') return 'success';
+  if (status === 'failed' || status === 'needs_reteach') return 'danger';
+  return 'warning';
 }

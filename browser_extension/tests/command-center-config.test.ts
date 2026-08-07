@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_COMMAND_CENTER_PROFILE,
   profileForUrl,
+  originAllowed,
   type CommandCenterProfile,
 } from '@/command-center/config';
 
@@ -44,5 +45,16 @@ describe('CommandCenter profiles', () => {
 
   it('returns null for invalid URLs', () => {
     expect(profileForUrl('not a URL', [DEFAULT_COMMAND_CENTER_PROFILE])).toBeNull();
+  });
+
+  it('limits capture to exact configured origins', () => {
+    expect(
+      originAllowed('http://yifeng.dtsum.com/purchase/apply', [
+        'http://yifeng.dtsum.com',
+      ]),
+    ).toBe(true);
+    expect(
+      originAllowed('https://example.com/', ['http://yifeng.dtsum.com']),
+    ).toBe(false);
   });
 });

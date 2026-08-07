@@ -23,6 +23,7 @@ import {
   createDomSnapshotScheduler,
 } from '@/capture/session-side-effects';
 import type { CapturedEvent, CaptureSettings } from '@/shared/types';
+import { originAllowed } from '@/command-center/config';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -40,6 +41,7 @@ type ActiveRecordingResponse = {
   traceId: string | null;
   captureSettings?: CaptureSettings | null;
   capturePaused?: boolean;
+  allowedOrigins?: string[];
 };
 
 type RecordingStateMessage = {
@@ -48,6 +50,7 @@ type RecordingStateMessage = {
   traceId: string | null;
   captureSettings?: CaptureSettings | null;
   capturePaused?: boolean;
+  allowedOrigins?: string[];
 };
 
 type FlushRecordingEventsMessage = {
@@ -79,7 +82,8 @@ async function refreshRecordingState(): Promise<void> {
     response.active,
     response.traceId,
     response.captureSettings,
-    Boolean(response.capturePaused)
+    Boolean(response.capturePaused),
+    response.allowedOrigins ?? [],
   );
 }
 
@@ -87,10 +91,11 @@ function enqueueRecordingState(
   active: boolean,
   traceId: string | null,
   captureSettings?: CaptureSettings | null,
-  capturePaused = false
+  capturePaused = false,
+  allowedOrigins: string[] = [],
 ): Promise<void> {
   const next = recordingStateQueue.then(() =>
-    applyRecordingState(active, traceId, captureSettings, capturePaused)
+    applyRecordingState(active, traceId, captureSettings, capturePaused, allowedOrigins)
   );
   recordingStateQueue = next.catch(() => undefined);
   return next;
@@ -100,9 +105,14 @@ async function applyRecordingState(
   active: boolean,
   traceId: string | null,
   captureSettings?: CaptureSettings | null,
-  capturePaused = false
+  capturePaused = false,
+  allowedOrigins: string[] = [],
 ): Promise<void> {
   if (!active || !traceId) {
+    stopCapture();
+    return;
+  }
+  if (!originAllowed(location.href, allowedOrigins)) {
     stopCapture();
     return;
   }
@@ -291,7 +301,8 @@ function handleRuntimeMessage(
       message.active,
       message.traceId,
       message.captureSettings,
-      Boolean(message.capturePaused)
+      Boolean(message.capturePaused),
+      message.allowedOrigins ?? [],
     );
   }
   return undefined;

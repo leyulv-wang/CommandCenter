@@ -14,6 +14,7 @@ type RuntimeMessage =
   | { type: 'get-active-recording' }
   | { type: 'start-recording'; label?: string }
   | { type: 'stop-recording'; traceId?: string }
+  | { type: 'get-command-center-status'; traceId: string }
   | { type: 'event'; event: CapturedEvent }
   | { type: 'resume-upload'; traceId: string; label?: string }
   | { type: 'delete-recording'; traceId: string };
@@ -78,6 +79,7 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
         traceId: activeTraceId,
         recovered: activeTraceRecovered,
         captureSettings: await captureSettingsForActiveRecording(activeTraceId, activeRow),
+        allowedOrigins: activeRow?.command_center?.allowed_origins ?? [],
         row: activeRow
       };
     }
@@ -95,9 +97,13 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
       const row = await commandCenterSession.stop(traceId);
       if (activeTraceId === traceId) activeTraceId = null;
       activeTraceRecovered = false;
-      await broadcastRecordingState(false, null, null);
+      await broadcastRecordingState(false, null, null, []);
       await refreshRecordingBadge();
       return { active: false, traceId: null, recovered: false, captureSettings: null, row };
+    }
+
+    case 'get-command-center-status': {
+      return await commandCenterSession.getStatus(message.traceId);
     }
 
     case 'event': {
@@ -118,7 +124,7 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
       if (activeTraceId === message.traceId) {
         activeTraceId = null;
         activeTraceRecovered = false;
-        await broadcastRecordingState(false, null, null);
+        await broadcastRecordingState(false, null, null, []);
         await refreshRecordingBadge();
       }
       return { ok: true };
@@ -140,7 +146,12 @@ async function beginRecording(label?: string): Promise<RecordingRow> {
   activeTraceId = row.trace_id;
   activeTraceRecovered = false;
   const captureSettings = await captureSettingsForActiveRecording(activeTraceId, row);
-  await broadcastRecordingState(true, activeTraceId, captureSettings);
+  await broadcastRecordingState(
+    true,
+    activeTraceId,
+    captureSettings,
+    row.command_center?.allowed_origins ?? [],
+  );
   await refreshRecordingBadge();
   return row;
 }
@@ -286,7 +297,8 @@ async function captureSettingsForActiveRecording(traceId: string | null, row: Re
 async function broadcastRecordingState(
   active: boolean,
   traceId: string | null,
-  captureSettings?: CaptureSettings | null
+  captureSettings?: CaptureSettings | null,
+  allowedOrigins: string[] = [],
 ): Promise<void> {
   const resolvedCaptureSettings = captureSettings === undefined ? await captureSettingsForActiveRecording(traceId, null) : captureSettings;
   const tabs = await browser.tabs.query({ url: ['http://*/*', 'https://*/*'] });
@@ -298,7 +310,8 @@ async function broadcastRecordingState(
           type: 'recording-state',
           active,
           traceId,
-          captureSettings: resolvedCaptureSettings
+          captureSettings: resolvedCaptureSettings,
+          allowedOrigins,
         })
       )
   );
@@ -347,6 +360,8 @@ function isRuntimeMessage(message: unknown): message is RuntimeMessage {
     type === 'get-active-recording' ||
     type === 'start-recording' ||
     type === 'stop-recording' ||
+    (type === 'get-command-center-status' &&
+      typeof (message as { traceId?: unknown }).traceId === 'string') ||
     type === 'event' ||
     (type === 'resume-upload' && typeof (message as { traceId?: unknown }).traceId === 'string') ||
     (type === 'delete-recording' && typeof (message as { traceId?: unknown }).traceId === 'string')
