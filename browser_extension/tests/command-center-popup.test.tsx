@@ -73,4 +73,73 @@ describe('CommandCenter popup', () => {
       }),
     );
   });
+
+  it('restores a failed local upload instead of returning to the idle form', async () => {
+    vi.mocked(sendRuntimeMessage).mockImplementation(async (message: unknown) => {
+      if ((message as { type?: string }).type === 'get-command-center-status') {
+        return {
+          recording_id: 'remote-failed',
+          status: 'failed',
+        } as never;
+      }
+      return {
+        active: false,
+        traceId: null,
+        row: {
+          trace_id: 'tr_failed',
+          status: 'failed',
+          envelope: {
+            label: '查询采购申请',
+            started_at: new Date().toISOString(),
+            summary: { event_counts: {} },
+          },
+          command_center: {
+            recording_id: 'remote-failed',
+            remote_status: 'failed',
+          },
+        },
+      } as never;
+    });
+
+    render(<PopupApp />);
+
+    expect(
+      await screen.findByText('处理失败，证据仍保存在本地。'),
+    ).toBeVisible();
+    expect(screen.queryByLabelText('演示目标')).not.toBeInTheDocument();
+  });
+
+  it('restores an uploaded recording that is still learning', async () => {
+    vi.mocked(sendRuntimeMessage).mockImplementation(async (message: unknown) => {
+      if ((message as { type?: string }).type === 'get-command-center-status') {
+        return {
+          recording_id: 'remote-learning',
+          status: 'learning',
+        } as never;
+      }
+      return {
+        active: false,
+        traceId: null,
+        row: {
+          trace_id: 'tr_learning',
+          status: 'uploaded',
+          envelope: {
+            label: '查询采购申请',
+            started_at: new Date().toISOString(),
+            summary: { event_counts: {} },
+          },
+          command_center: {
+            recording_id: 'remote-learning',
+            remote_status: 'learning',
+          },
+        },
+      } as never;
+    });
+
+    render(<PopupApp />);
+
+    expect(
+      await screen.findByText('智能体正在对齐页面操作和 API。'),
+    ).toBeVisible();
+  });
 });

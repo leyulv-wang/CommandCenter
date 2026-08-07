@@ -50,6 +50,17 @@ export function PopupApp() {
           setActiveRow(active.row);
           setObjective(active.row.envelope.label ?? '');
           setView('recording');
+        } else if (active.row) {
+          setActiveRow(active.row);
+          setObjective(active.row.envelope.label ?? '');
+          setRemoteStatus({
+            recording_id: active.row.command_center?.recording_id ?? '',
+            status:
+              active.row.status === 'failed'
+                ? 'failed'
+                : active.row.command_center?.remote_status ?? 'queued',
+          });
+          setView('processing');
         } else {
           setView('idle');
         }
@@ -66,7 +77,11 @@ export function PopupApp() {
   }, []);
 
   useEffect(() => {
-    if (view !== 'processing' || !activeRow) return undefined;
+    if (
+      view !== 'processing' ||
+      !activeRow ||
+      activeRow.status === 'failed'
+    ) return undefined;
     let cancelled = false;
     const poll = async () => {
       try {

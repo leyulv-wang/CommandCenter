@@ -7,6 +7,7 @@ import {
 } from '@/recording/recorder';
 import { commandCenterSession } from '@/command-center/session';
 import { connectRecordingTab } from '@/recording/tab-connection';
+import { latestCommandCenterRecording } from '@/recording/latest-command-center';
 import { errorMessage } from '@/shared/errors';
 import type { CapturedEvent, CaptureSettings, RecordingRow } from '@/shared/types';
 import { db, getConfig } from '@/storage/db';
@@ -75,13 +76,14 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
   switch (message.type) {
     case 'get-active-recording': {
       const activeRow = activeTraceId ? ((await db.recordings.get(activeTraceId)) ?? null) : null;
+      const visibleRow = activeRow ?? (await latestCommandCenterRecording(db));
       return {
         active: activeTraceId !== null,
         traceId: activeTraceId,
         recovered: activeTraceRecovered,
         captureSettings: await captureSettingsForActiveRecording(activeTraceId, activeRow),
         allowedOrigins: activeRow?.command_center?.allowed_origins ?? [],
-        row: activeRow
+        row: visibleRow
       };
     }
 
