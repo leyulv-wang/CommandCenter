@@ -9,7 +9,9 @@ export async function sha256Hex(input: string | ArrayBuffer | Uint8Array | Blob)
   } else {
     bytes = input;
   }
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) return sha256BytesHexSync(new Uint8Array(bytes));
+  const digest = await subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
@@ -23,7 +25,10 @@ function rotateRight(value: number, bits: number): number {
  * {@link sha256Hex} everywhere else.
  */
 export function sha256HexSync(input: string): string {
-  const bytes = new TextEncoder().encode(input);
+  return sha256BytesHexSync(new TextEncoder().encode(input));
+}
+
+export function sha256BytesHexSync(bytes: Uint8Array): string {
   const hash = new Uint32Array([
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
   ]);
