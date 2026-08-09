@@ -10,11 +10,12 @@ import {
 
 describe('CommandCenter profiles', () => {
   it('selects the configured MES profile by exact origin', () => {
-    expect(
+    const profile =
       profileForUrl('http://yifeng.dtsum.com/purchase/apply', [
         DEFAULT_COMMAND_CENTER_PROFILE,
-      ])?.systemCode,
-    ).toBe('yifeng_mes');
+      ]);
+    expect(profile?.systemCode).toBe('yifeng_mes');
+    expect(profile?.credentialHeader).toBe('X-Access-Token');
   });
 
   it('selects the local purchase profile by exact origin only', () => {
@@ -22,6 +23,10 @@ describe('CommandCenter profiles', () => {
       profileForUrl('http://127.0.0.1:8101/', DEFAULT_COMMAND_CENTER_PROFILES)
         ?.systemCode,
     ).toBe('connected_system');
+    expect(
+      profileForUrl('http://127.0.0.1:8101/', DEFAULT_COMMAND_CENTER_PROFILES)
+        ?.credentialHeader,
+    ).toBeUndefined();
     expect(
       profileForUrl('http://127.0.0.1:81010/', DEFAULT_COMMAND_CENTER_PROFILES),
     ).toBeNull();

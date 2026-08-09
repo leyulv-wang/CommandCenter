@@ -75,6 +75,36 @@ describe('CommandCenter popup', () => {
     );
   });
 
+  it('lets the user persistently authorize the matched MES connection', async () => {
+    vi.stubGlobal('chrome', {
+      tabs: {
+        query: vi.fn(async () => [
+          { id: 9, url: 'http://yifeng.dtsum.com/purchase/apply' },
+        ]),
+      },
+    });
+    vi.mocked(sendRuntimeMessage).mockImplementation(async (message: unknown) => {
+      const type = (message as { type?: string }).type;
+      if (type === 'get-system-connection') {
+        return { status: 'disconnected', consent: false } as never;
+      }
+      if (type === 'enable-system-connection') {
+        return { status: 'waiting_for_mes_request', consent: true } as never;
+      }
+      return { active: false, traceId: null, row: null } as never;
+    });
+
+    render(<PopupApp />);
+    expect(await screen.findByText('益丰 MES')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: '连接中控' }));
+
+    await waitFor(() => expect(sendRuntimeMessage).toHaveBeenCalledWith({
+      type: 'enable-system-connection',
+      profileId: 'yifeng-mes',
+    }));
+    expect(await screen.findByText(/请在 MES 中执行一次查询/)).toBeVisible();
+  });
+
   it('restores a failed local upload instead of returning to the idle form', async () => {
     vi.mocked(sendRuntimeMessage).mockImplementation(async (message: unknown) => {
       if ((message as { type?: string }).type === 'get-command-center-status') {

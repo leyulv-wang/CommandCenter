@@ -8,11 +8,18 @@ export type CommandCenterRecordingStatus = {
   public_message?: string;
 };
 
+export type SystemConnectionStatus = {
+  system_code?: string;
+  display_name?: string;
+  status: string;
+  credential_source?: string;
+};
+
 export type ExtensionAbortReason =
   | 'no_uploadable_evidence'
   | 'upload_failed';
 
-export type CommandCenterClient = {
+export type CommandCenterRecordingClient = {
   createRecording(input: {
     objective: string;
     sourceSystem: string;
@@ -31,6 +38,22 @@ export type CommandCenterClient = {
   ): Promise<{ status: string }>;
   getStatus(recordingId: string): Promise<CommandCenterRecordingStatus>;
 };
+
+export type CommandCenterConnectionClient = {
+  beginSystemConnection(systemCode: string): Promise<{ connectionToken: string }>;
+  putSystemCredential(
+    systemCode: string,
+    connectionToken: string,
+    name: string,
+    secret: string,
+  ): Promise<SystemConnectionStatus>;
+  getSystemConnection(systemCode: string): Promise<SystemConnectionStatus>;
+  disconnectSystem(systemCode: string): Promise<SystemConnectionStatus>;
+  verifyLatestSystemSkill(systemCode: string): Promise<{ status: string }>;
+};
+
+export type CommandCenterClient = CommandCenterRecordingClient &
+  CommandCenterConnectionClient;
 
 export function createCommandCenterClient(options: {
   baseUrl: string;
@@ -125,6 +148,48 @@ export function createCommandCenterClient(options: {
       return (await request(
         `/recordings/${encodeURIComponent(recordingId)}`,
       )) as CommandCenterRecordingStatus;
+    },
+
+    async beginSystemConnection(systemCode) {
+      const response = await request(
+        `/system-connections/${encodeURIComponent(systemCode)}/begin`,
+        { method: 'POST' },
+      );
+      return { connectionToken: requiredString(response, 'connection_token') };
+    },
+
+    async putSystemCredential(systemCode, connectionToken, name, secret) {
+      return (await request(
+        `/system-connections/${encodeURIComponent(systemCode)}/credential`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CommandCenter-Connection-Token': connectionToken,
+          },
+          body: JSON.stringify({ name, secret }),
+        },
+      )) as SystemConnectionStatus;
+    },
+
+    async getSystemConnection(systemCode) {
+      return (await request(
+        `/system-connections/${encodeURIComponent(systemCode)}`,
+      )) as SystemConnectionStatus;
+    },
+
+    async disconnectSystem(systemCode) {
+      return (await request(
+        `/system-connections/${encodeURIComponent(systemCode)}`,
+        { method: 'DELETE' },
+      )) as SystemConnectionStatus;
+    },
+
+    async verifyLatestSystemSkill(systemCode) {
+      return (await request(
+        `/system-connections/${encodeURIComponent(systemCode)}/verify-latest-skill`,
+        { method: 'POST' },
+      )) as { status: string };
     },
   };
 }

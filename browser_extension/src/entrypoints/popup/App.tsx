@@ -4,6 +4,7 @@ import {
   type CommandCenterProfile,
 } from '@/command-center/config';
 import type { CommandCenterRecordingStatus } from '@/command-center/client';
+import type { SystemConnectionView } from '@/command-center/connection';
 import { errorMessage } from '@/shared/errors';
 import { sendRuntimeMessage } from '@/shared/runtime';
 import type { RecordingRow } from '@/shared/types';
@@ -31,6 +32,7 @@ export function PopupApp() {
   const [remoteStatus, setRemoteStatus] = useState<CommandCenterRecordingStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [connection, setConnection] = useState<SystemConnectionView | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,6 +77,27 @@ export function PopupApp() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!profile?.credentialHeader) {
+      setConnection(null);
+      return undefined;
+    }
+    let cancelled = false;
+    void sendRuntimeMessage<SystemConnectionView>({
+      type: 'get-system-connection',
+      profileId: profile.id,
+    }).then((status) => {
+      if (!cancelled) setConnection(status);
+    }).catch(() => {
+      if (!cancelled) {
+        setConnection({ status: 'disconnected', consent: false });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [profile]);
 
   useEffect(() => {
     if (
@@ -156,6 +179,28 @@ export function PopupApp() {
     setView('idle');
   }
 
+  function enableConnection(): void {
+    if (!profile) return;
+    void run(async () => {
+      const status = await sendRuntimeMessage<SystemConnectionView>({
+        type: 'enable-system-connection',
+        profileId: profile.id,
+      });
+      setConnection(status);
+    });
+  }
+
+  function disableConnection(): void {
+    if (!profile) return;
+    void run(async () => {
+      const status = await sendRuntimeMessage<SystemConnectionView>({
+        type: 'disable-system-connection',
+        profileId: profile.id,
+      });
+      setConnection(status);
+    });
+  }
+
   const canStart =
     view === 'idle' && Boolean(profile) && Boolean(objective.trim()) && !busy;
 
@@ -186,6 +231,31 @@ export function PopupApp() {
           <p className="jf-domains">{tabHost}</p>
         </CardContent>
       </Card>
+
+      {profile?.credentialHeader ? (
+        <Card>
+          <CardContent>
+            <div className="jf-rec-top">
+              <span className="jf-muted">系统连接</span>
+              <Badge tone={connection?.status === 'connected' ? 'success' : 'warning'}>
+                {connection?.status === 'connected' ? '中控已连接' : '尚未连接'}
+              </Badge>
+            </div>
+            {connection?.status === 'waiting_for_mes_request' ? (
+              <Alert tone="warning">请在 MES 中执行一次查询，中控将自动建立连接。</Alert>
+            ) : null}
+            {connection?.consent ? (
+              <Button className="jf-wide" onClick={disableConnection} disabled={busy}>
+                断开连接
+              </Button>
+            ) : (
+              <Button className="jf-wide" onClick={enableConnection} disabled={busy}>
+                连接中控
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       {view === 'loading' ? <p className="jf-muted">正在读取录制状态…</p> : null}
 
@@ -259,6 +329,7 @@ function statusText(status: string | undefined): string {
     queued: '证据已上传，等待智能体学习。',
     learning: '智能体正在对齐页面操作和 API。',
     testing: '候选 Skill 正在进行无害测试。',
+    api_candidate: 'API Skill 已生成，等待执行连接。',
     published: 'Skill 已通过测试并发布。',
     verified_candidate: 'API Skill 已验证。',
     browser_candidate: '没有可靠 API，已保存为浏览器候选。',

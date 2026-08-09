@@ -6,7 +6,17 @@ import {
   setRecordingLabel,
 } from '@/recording/recorder';
 import { commandCenterSession } from '@/command-center/session';
-import { originAllowed, profileById } from '@/command-center/config';
+import {
+  originAllowed,
+  profileById,
+  profileForUrl,
+  type CommandCenterProfile,
+} from '@/command-center/config';
+import { createCommandCenterClient } from '@/command-center/client';
+import {
+  createBrowserConnectionConsentStore,
+  SystemConnectionCoordinator,
+} from '@/command-center/connection';
 import { connectRecordingTab } from '@/recording/tab-connection';
 import { latestCommandCenterRecording } from '@/recording/latest-command-center';
 import {
@@ -22,6 +32,9 @@ type RuntimeMessage =
   | { type: 'start-recording'; label?: string; profileId?: string }
   | { type: 'stop-recording'; traceId?: string }
   | { type: 'get-command-center-status'; traceId: string }
+  | { type: 'get-system-connection'; profileId: string }
+  | { type: 'enable-system-connection'; profileId: string }
+  | { type: 'disable-system-connection'; profileId: string }
   | { type: 'event'; event: CapturedEvent }
   | { type: 'resume-upload'; traceId: string; label?: string }
   | { type: 'delete-recording'; traceId: string };
@@ -50,6 +63,7 @@ const DEFAULT_CAPTURE_SETTINGS: CaptureSettings = {
   video: false,
   networkBodies: true
 };
+const connectionConsentStore = createBrowserConnectionConsentStore();
 
 export default defineBackground(() => {
   recovery = recoverActiveTraceId();
@@ -82,6 +96,13 @@ export default defineBackground(() => {
       });
     },
     { urls: ['<all_urls>'] },
+  );
+  chrome.webRequest.onBeforeSendHeaders.addListener(
+    (details) => {
+      void observeSystemCredential(details.url, details.requestHeaders ?? []);
+    },
+    { urls: ['<all_urls>'] },
+    ['requestHeaders', 'extraHeaders'],
   );
   chrome.webRequest.onCompleted.addListener(
     (details) => {
@@ -165,6 +186,21 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
 
     case 'get-command-center-status': {
       return await commandCenterSession.getStatus(message.traceId);
+    }
+
+    case 'get-system-connection': {
+      const profile = await requiredProfile(message.profileId);
+      return await connectionCoordinator(profile).status(profile);
+    }
+
+    case 'enable-system-connection': {
+      const profile = await requiredProfile(message.profileId);
+      return await connectionCoordinator(profile).enable(profile);
+    }
+
+    case 'disable-system-connection': {
+      const profile = await requiredProfile(message.profileId);
+      return await connectionCoordinator(profile).disable(profile);
     }
 
     case 'event': {
@@ -329,6 +365,41 @@ async function handleTabUpdated(
   }
 }
 
+async function requiredProfile(profileId: string): Promise<CommandCenterProfile> {
+  const config = await getConfig();
+  const profile = profileById(profileId, config.commandCenterProfiles);
+  if (!profile) throw new Error('没有可用的业务系统连接配置。');
+  return profile;
+}
+
+function connectionCoordinator(profile: CommandCenterProfile): SystemConnectionCoordinator {
+  return new SystemConnectionCoordinator({
+    consentStore: connectionConsentStore,
+    client: createCommandCenterClient({ baseUrl: profile.commandCenterUrl }),
+  });
+}
+
+async function observeSystemCredential(
+  url: string,
+  requestHeaders: readonly chrome.webRequest.HttpHeader[],
+): Promise<void> {
+  const config = await getConfig();
+  const profile = profileForUrl(url, config.commandCenterProfiles);
+  if (!profile?.credentialHeader) return;
+  await connectionCoordinator(profile).observeRequest(profile, {
+    url,
+    requestHeaders: requestHeaders
+      .filter((header): header is chrome.webRequest.HttpHeader & { name: string } =>
+        typeof header.name === 'string')
+      .map((header) => ({
+        name: header.name,
+        ...(typeof header.value === 'string' ? { value: header.value } : {}),
+      })),
+  }).catch(() => {
+    // Automatic synchronization is best-effort and never interrupts the MES request.
+  });
+}
+
 async function handleTabRemoved(tabId: number): Promise<void> {
   const url = tabUrlCache.get(tabId) ?? 'about:blank';
   tabUrlCache.delete(tabId);
@@ -488,6 +559,10 @@ function isRuntimeMessage(message: unknown): message is RuntimeMessage {
     type === 'stop-recording' ||
     (type === 'get-command-center-status' &&
       typeof (message as { traceId?: unknown }).traceId === 'string') ||
+    ((type === 'get-system-connection' ||
+      type === 'enable-system-connection' ||
+      type === 'disable-system-connection') &&
+      typeof (message as { profileId?: unknown }).profileId === 'string') ||
     type === 'event' ||
     (type === 'resume-upload' && typeof (message as { traceId?: unknown }).traceId === 'string') ||
     (type === 'delete-recording' && typeof (message as { traceId?: unknown }).traceId === 'string')

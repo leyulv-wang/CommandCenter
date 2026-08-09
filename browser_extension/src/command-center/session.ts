@@ -1,6 +1,6 @@
 import {
   createCommandCenterClient,
-  type CommandCenterClient,
+  type CommandCenterRecordingClient,
   type CommandCenterRecordingStatus,
 } from '@/command-center/client';
 import type { CommandCenterProfile } from '@/command-center/config';
@@ -27,7 +27,7 @@ export type CommandCenterSessionCoordinator = {
 
 export function createCommandCenterSessionCoordinator(
   dependencies: {
-    clientFactory?: (baseUrl: string) => CommandCenterClient;
+    clientFactory?: (baseUrl: string) => CommandCenterRecordingClient;
     startLocal?: StartLocal;
     stopLocal?: (traceId: string) => Promise<RecordingRow>;
     uploadLocal?: (traceId: string) => Promise<RecordingRow>;

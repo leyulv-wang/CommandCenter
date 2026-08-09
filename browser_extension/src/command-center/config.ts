@@ -5,6 +5,7 @@ export type CommandCenterProfile = {
   systemCode: string;
   commandCenterUrl: string;
   captureNetworkBodies: boolean;
+  credentialHeader?: string;
 };
 
 export const LOCAL_PURCHASE_COMMAND_CENTER_PROFILE: CommandCenterProfile = {
@@ -23,6 +24,7 @@ export const DEFAULT_COMMAND_CENTER_PROFILE: CommandCenterProfile = {
   systemCode: 'yifeng_mes',
   commandCenterUrl: 'http://127.0.0.1:8000',
   captureNetworkBodies: true,
+  credentialHeader: 'X-Access-Token',
 };
 
 export const DEFAULT_COMMAND_CENTER_PROFILES: CommandCenterProfile[] = [

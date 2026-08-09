@@ -114,4 +114,38 @@ describe('CommandCenter client', () => {
     expect((error as Error).message).toContain('CommandCenter request failed (422)');
     expect((error as Error).message).not.toContain('private-token');
   });
+
+  it('uses a separate connection token header and never returns the MES secret', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({
+        system_code: 'yifeng_mes',
+        display_name: '益丰 MES',
+        connection_token: 'connection-token',
+      }, 201))
+      .mockResolvedValueOnce(jsonResponse({
+        system_code: 'yifeng_mes',
+        status: 'connected',
+        credential_source: 'windows_keyring',
+      }, 202));
+    const client = createCommandCenterClient({ baseUrl: 'http://127.0.0.1:8000', fetchImpl });
+
+    const begun = await client.beginSystemConnection('yifeng_mes');
+    await client.putSystemCredential(
+      'yifeng_mes',
+      begun.connectionToken,
+      'X-Access-Token',
+      'private-mes-token',
+    );
+
+    const [, init] = fetchImpl.mock.calls[1]!;
+    expect(new Headers(init?.headers).get('X-CommandCenter-Connection-Token')).toBe(
+      'connection-token',
+    );
+    expect(JSON.parse(String(init?.body))).toEqual({
+      name: 'X-Access-Token',
+      secret: 'private-mes-token',
+    });
+    expect(String(await fetchImpl.mock.results[1]!.value)).not.toContain('private-mes-token');
+  });
 });

@@ -1,6 +1,6 @@
 import {
   createCommandCenterClient,
-  type CommandCenterClient,
+  type CommandCenterRecordingClient,
 } from '@/command-center/client';
 import { createEvidenceConverter } from '@/command-center/evidence';
 import { db, type JourneyForgeDB } from '@/storage/db';
@@ -20,7 +20,7 @@ export type CommandCenterUploadRunner = {
 };
 
 export function createCommandCenterUploadRunner(options: {
-  clientFactory?: (baseUrl: string) => CommandCenterClient;
+  clientFactory?: (baseUrl: string) => CommandCenterRecordingClient;
   database?: JourneyForgeDB;
 } = {}): CommandCenterUploadRunner {
   const database = options.database ?? db;
