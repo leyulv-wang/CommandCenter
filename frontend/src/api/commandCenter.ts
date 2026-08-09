@@ -4,6 +4,8 @@ import type {
   RecordingSummary,
   RecordingView,
   TaskRunView,
+  SystemConnectionView,
+  SystemSkillVerificationView,
 } from './types'
 
 
@@ -52,4 +54,21 @@ export function selectTaskObject(runId: string, objectId: string) {
 
 export function getTaskRun(runId: string) {
   return request<TaskRunView>(`/task-runs/${runId}`)
+}
+
+export function getSystemConnection(systemCode: string) {
+  return request<SystemConnectionView>(`/system-connections/${systemCode}`)
+}
+
+export function disconnectSystem(systemCode: string) {
+  return request<SystemConnectionView>(`/system-connections/${systemCode}`, {
+    method: 'DELETE',
+  })
+}
+
+export function verifyLatestSystemSkill(systemCode: string) {
+  return request<SystemSkillVerificationView>(
+    `/system-connections/${systemCode}/verify-latest-skill`,
+    { method: 'POST' },
+  )
 }

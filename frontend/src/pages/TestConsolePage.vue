@@ -30,6 +30,8 @@
       </button>
     </div>
 
+    <SystemConnectionStatus />
+
     <div class="console-grid">
       <NaturalLanguageTaskPanel />
       <LatestLearningResult :recording="selectedRecording" />
@@ -62,6 +64,7 @@ import type { ExtensionRecordingDetail, RecordingSummary } from '../api/types'
 import LatestLearningResult from '../components/LatestLearningResult.vue'
 import NaturalLanguageTaskPanel from '../components/NaturalLanguageTaskPanel.vue'
 import RecordingHistory from '../components/RecordingHistory.vue'
+import SystemConnectionStatus from '../components/SystemConnectionStatus.vue'
 import { isRecordingTerminal } from '../recordingPresentation'
 
 const POLL_INTERVAL_MS = 3000

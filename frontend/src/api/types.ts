@@ -182,3 +182,19 @@ export interface TaskRunView {
   }
   errors?: string[]
 }
+
+export interface SystemConnectionView {
+  system_code: string
+  display_name: string
+  status: 'connected' | 'disconnected'
+  credential_source: 'windows_keyring'
+}
+
+export interface SystemSkillVerificationView {
+  system_code: string
+  recording_id: string
+  skill_id: string
+  skill_version: number
+  status: 'api_candidate' | 'verified_candidate'
+  test_results: Array<Record<string, unknown>>
+}

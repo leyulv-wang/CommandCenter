@@ -16,7 +16,10 @@ describe('NaturalLanguageTaskPanel', () => {
       run_id: 'run-1',
       user_request: '查询采购申请列表',
       status: 'succeeded',
-      final_response: { summary: '查询完成' },
+      final_response: {
+        summary: '查询完成',
+        outputs: { query: { result: { records: [{ id: 'A-1' }] } } },
+      },
     })
   })
 
@@ -32,5 +35,6 @@ describe('NaturalLanguageTaskPanel', () => {
     expect(api.createTaskRun).toHaveBeenCalledWith('查询采购申请列表')
     expect(wrapper.text()).toContain('任务已完成')
     expect(wrapper.text()).toContain('查询完成')
+    expect(wrapper.get('[data-testid="structured-output"]').text()).toContain('A-1')
   })
 })

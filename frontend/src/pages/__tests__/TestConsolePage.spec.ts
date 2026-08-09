@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ExtensionRecordingDetail, RecordingSummary } from '../../api/types'
 import LatestLearningResult from '../../components/LatestLearningResult.vue'
 import RecordingHistory from '../../components/RecordingHistory.vue'
+import SystemConnectionStatus from '../../components/SystemConnectionStatus.vue'
 import TestConsolePage from '../TestConsolePage.vue'
 
 const api = vi.hoisted(() => ({
@@ -48,6 +49,7 @@ describe('TestConsolePage', () => {
     expect(wrapper.text()).toContain('浏览器演示')
     expect(wrapper.text()).toContain('API Skill')
     expect(wrapper.text()).toContain('中控执行')
+    expect(wrapper.findComponent(SystemConnectionStatus).exists()).toBe(true)
     expect(wrapper.findComponent(LatestLearningResult).props('recording')).toEqual(detail)
   })
 
