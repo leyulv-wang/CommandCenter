@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 from fastapi.encoders import jsonable_encoder
 
 from app.command_center.repository import CommandCenterRepository
-from app.command_center.schemas import ExtensionEventBatch
+from app.command_center.schemas import ExtensionEventBatch, SkillDefinition
 from app.command_center.system_connections import (
     ConnectionHandshakeStore,
     SystemCredentialStore,
@@ -65,6 +65,7 @@ class CommandCenterService:
         browser_skill_distiller: Any | None = None,
         system_credential_store: SystemCredentialStore | None = None,
         connection_handshakes: ConnectionHandshakeStore | None = None,
+        system_skill_tester_factory: Any | None = None,
     ):
         self.repository = repository
         self.recorder = recorder
@@ -76,6 +77,7 @@ class CommandCenterService:
         self.browser_skill_distiller = browser_skill_distiller
         self.system_credential_store = system_credential_store
         self.connection_handshakes = connection_handshakes
+        self.system_skill_tester_factory = system_skill_tester_factory
         self._analysis_lock = threading.Lock()
         self._active_analyses: set[UUID] = set()
 
@@ -127,6 +129,109 @@ class CommandCenterService:
         if self.connection_handshakes is not None:
             self.connection_handshakes.clear(system_code)
         return self.get_system_connection(system_code)
+
+    def verify_latest_system_skill(self, system_code: str) -> dict[str, Any]:
+        self._system_profile(system_code)
+        if not (
+            self.system_credential_store
+            and self.system_credential_store.has(system_code)
+        ):
+            raise ValueError("system connection is not available")
+        if self.system_skill_tester_factory is None:
+            raise RuntimeError("system Skill verification is not configured")
+
+        candidate_ids = {
+            (str(skill.skill_id), skill.version)
+            for skill in self.repository.list_candidate_skills()
+        }
+        candidates: list[tuple[dict[str, Any], SkillDefinition, list[dict[str, Any]]]] = []
+        for recording in self.repository.list_recordings():
+            if (
+                recording.get("source_system") != system_code
+                or recording.get("status") != "api_candidate"
+            ):
+                continue
+            learning_result = recording.get("learning_result")
+            if not isinstance(learning_result, dict):
+                continue
+            candidate_payload = learning_result.get("candidate_skill")
+            test_plan = learning_result.get("test_plan")
+            if not isinstance(candidate_payload, dict) or not isinstance(test_plan, list):
+                continue
+            skill = SkillDefinition.model_validate(candidate_payload)
+            if (str(skill.skill_id), skill.version) not in candidate_ids:
+                continue
+            cases = [case for case in test_plan if isinstance(case, dict)]
+            candidates.append((recording, skill, cases))
+        if not candidates:
+            raise KeyError(f"no API candidate for system: {system_code}")
+
+        recording, skill, test_plan = max(
+            candidates,
+            key=lambda item: str(item[0].get("created_at", "")),
+        )
+        if any(step.side_effect != "read" for step in skill.steps):
+            raise ValueError("only read-only API candidates can be verified")
+        categories = {
+            str(case.get("category", ""))
+            for case in test_plan
+        }
+        if categories != self.repository.REQUIRED_TESTS:
+            raise ValueError("candidate must contain all required read-only tests")
+
+        tester = self.system_skill_tester_factory(system_code)
+        results: list[dict[str, Any]] = []
+        for case in test_plan:
+            result = tester.run(skill, case)
+            results.append(result)
+            self.repository.save_test_result(
+                skill.skill_id,
+                skill.version,
+                str(result["category"]),
+                str(result["status"]),
+                result,
+            )
+
+        passed = {
+            str(result.get("category", ""))
+            for result in results
+            if result.get("status") == "passed"
+            and result.get("unknown_side_effect") is not True
+        }
+        verified = passed == self.repository.REQUIRED_TESTS
+        if verified:
+            skill = self.repository.mark_verified_candidate(
+                skill.skill_id, skill.version
+            )
+
+        learning_result = dict(recording["learning_result"])
+        learning_result.update(
+            {
+                "candidate_skill": skill.model_dump(mode="json"),
+                "test_results": results,
+                "final_status": (
+                    "verified_candidate" if verified else "api_candidate"
+                ),
+                "execution_verification": (
+                    "verified_live" if verified else "failed_live"
+                ),
+            }
+        )
+        recording["learning_result"] = learning_result
+        recording["status"] = (
+            "verified_candidate" if verified else "api_candidate"
+        )
+        recording["analysis_stage"] = "completed"
+        recording["verification_finished_at"] = datetime.now(UTC).isoformat()
+        self._save_recording(UUID(str(recording["recording_id"])), recording)
+        return {
+            "system_code": system_code,
+            "recording_id": str(recording["recording_id"]),
+            "skill_id": str(skill.skill_id),
+            "skill_version": skill.version,
+            "status": recording["status"],
+            "test_results": results,
+        }
 
     def _system_profile(self, system_code: str) -> Any:
         try:

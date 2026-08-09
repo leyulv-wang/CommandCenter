@@ -112,6 +112,18 @@ def create_router(service_provider: Callable[[], Any]) -> APIRouter:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @router.post("/system-connections/{system_code}/verify-latest-skill")
+    def verify_latest_system_skill(
+        system_code: str,
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.verify_latest_system_skill(system_code)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @router.get("/recordings")
     def list_recordings(
         capture_source: str | None = None,

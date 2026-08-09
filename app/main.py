@@ -410,6 +410,18 @@ def build_command_center_components(
             )
         )
 
+    def system_skill_tester_factory(system_code: str) -> ReadOnlySkillTestService:
+        catalog = catalogs.get(system_code)
+        executor = ToolExecutor(
+            catalog,
+            client,
+            credential_provider=system_credential_store.headers_for,
+        )
+        return ReadOnlySkillTestService(
+            catalog=catalog,
+            runner=SkillRunner(executor),
+        )
+
     service = CommandCenterService(
         repository=repository,
         recorder=RecorderService(
@@ -424,6 +436,7 @@ def build_command_center_components(
         browser_skill_distiller=agents,
         system_credential_store=system_credential_store,
         connection_handshakes=connection_handshakes,
+        system_skill_tester_factory=system_skill_tester_factory,
     )
     return CommandCenterComponents(
         profiles=profiles,

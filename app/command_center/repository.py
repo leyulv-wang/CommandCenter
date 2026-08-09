@@ -167,6 +167,13 @@ class CommandCenterRepository:
             ).all()
             return [SkillDefinition.model_validate_json(row.payload_json) for row in rows]
 
+    def list_candidate_skills(self) -> list[SkillDefinition]:
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(SkillVersionRow).where(SkillVersionRow.status == "candidate")
+            ).all()
+            return [SkillDefinition.model_validate_json(row.payload_json) for row in rows]
+
     def get_skill(self, skill_id: UUID) -> SkillDefinition:
         with self.session_factory() as session:
             row = session.scalar(

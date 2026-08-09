@@ -122,6 +122,17 @@ class FakeCommandCenterService:
             "credential_source": "windows_keyring",
         }
 
+    def verify_latest_system_skill(self, system_code):
+        self.verified_system_code = system_code
+        return {
+            "system_code": system_code,
+            "recording_id": str(self.recording_id),
+            "skill_id": str(uuid4()),
+            "skill_version": 1,
+            "status": "verified_candidate",
+            "test_results": [],
+        }
+
 
 def client_for(service):
     app = FastAPI()
@@ -183,6 +194,17 @@ def test_system_connection_api_never_returns_the_submitted_credential():
     assert service.system_credential_name == 'X-Access-Token'
     assert 'raw-private-token' not in connected.text
     assert 'raw-private-token' not in status.text
+
+
+def test_system_connection_can_verify_the_latest_saved_candidate():
+    service = FakeCommandCenterService()
+    response = client_for(service).post(
+        "/system-connections/yifeng_mes/verify-latest-skill"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "verified_candidate"
+    assert service.verified_system_code == "yifeng_mes"
 
 
 def test_extension_api_separates_evidence_and_plaintext_credential():

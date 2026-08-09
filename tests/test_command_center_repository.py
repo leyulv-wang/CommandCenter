@@ -80,6 +80,25 @@ def test_repository_retains_verified_candidate_outside_published_registry(tmp_pa
     assert repository.list_verified_candidates()[0].skill_id == skill.skill_id
 
 
+def test_repository_lists_unverified_candidates_only(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    candidate = SkillDefinition.model_validate(valid_skill_payload())
+    repository.save_candidate_skill(candidate)
+
+    verified_payload = valid_skill_payload()
+    verified = SkillDefinition.model_validate(verified_payload)
+    repository.save_candidate_skill(verified)
+    for category in ("normal", "parameter_variation", "idempotency"):
+        repository.save_test_result(
+            verified.skill_id, verified.version, category, "passed", {}
+        )
+    repository.mark_verified_candidate(verified.skill_id, verified.version)
+
+    assert [skill.skill_id for skill in repository.list_candidate_skills()] == [
+        candidate.skill_id
+    ]
+
+
 def test_repository_persists_recording_and_task_run_lifecycle(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
     recording_id = uuid4()
