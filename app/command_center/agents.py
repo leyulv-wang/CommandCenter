@@ -201,8 +201,8 @@ class AgentSuite:
         return self.model.generate(
             VerificationResult,
             (
-                "你是验证智能体。V1 只验证采购系统：根据 Skill 成功条件、步骤输出和"
-                "采购系统最终记录，确认本次采购申请是否存在且没有重复。"
+                "你是执行结果验证智能体。根据 Skill 成功条件、允许的 Tool 步骤输出和"
+                "可用的执行后观察，判断员工请求是否完成。"
                 "HTTP 2xx 不能单独证明业务成功；未知副作用必须返回 inconclusive。"
                 "StepResult.side_effect 中 occurred=true 表示已知写操作，"
                 "不能仅因发生写操作而判定为未知副作用。应结合操作描述、幂等信息、"
@@ -226,10 +226,10 @@ class AgentSuite:
         return self.model.generate(
             TaskMatchDecision,
             (
-                "你是任务匹配智能体。V1 只处理员工直接发起的采购申请。"
-                "根据员工自然语言选择唯一已发布 Skill，返回唯一候选输入对象编号，"
-                "并把申请人、物品名称、数量、采购原因等 Skill 所需输入提取到 literals。"
-                "不要查询或假设办公用品任务。"
+                "你是任务匹配智能体。根据员工自然语言、候选业务对象和 Skill 的名称、"
+                "描述、示例及输入定义，选择唯一最合适的可执行 Skill。返回候选对象编号，"
+                "并把该 Skill 声明的所有必填输入提取到 literals；不要补造用户没有表达且"
+                "无法从上下文确定的业务值。"
             ),
             {
                 "user_request": user_request,

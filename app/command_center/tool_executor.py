@@ -32,10 +32,12 @@ class ToolExecutor:
         client: httpx.Client | None = None,
         *,
         credential_provider: Callable[[str], dict[str, str]] | None = None,
+        credential_invalidator: Callable[[str], None] | None = None,
     ):
         self.catalog = catalog
         self.client = client or httpx.Client(timeout=30)
         self.credential_provider = credential_provider
+        self.credential_invalidator = credential_invalidator
 
     def execute(self, command: ExecutionCommand) -> StepResult:
         started_at = datetime.now(UTC)
@@ -97,6 +99,8 @@ class ToolExecutor:
                 **request_kwargs,
             )
             response.raise_for_status()
+            if len(response.content) > tool.max_response_bytes:
+                raise ResponseTooLargeError
             payload = response.json()
             is_write = tool.side_effect == "write"
             side_effect: dict[str, Any] = {"occurred": is_write}
@@ -134,6 +138,15 @@ class ToolExecutor:
                 retry_safe=bool(command.idempotency_key) or not is_write,
             )
         except (httpx.HTTPError, ValueError) as exc:
+            if (
+                isinstance(exc, httpx.HTTPStatusError)
+                and exc.response.status_code in {401, 403}
+                and self.credential_invalidator is not None
+            ):
+                try:
+                    self.credential_invalidator(tool.system_code)
+                except Exception:
+                    pass
             return StepResult(
                 run_id=command.run_id,
                 step_id=command.step_id,
@@ -142,8 +155,19 @@ class ToolExecutor:
                 started_at=started_at,
                 ended_at=datetime.now(UTC),
                 request_summary={"method": tool.method, "path": path},
-                error={"code": type(exc).__name__, "message": str(exc)},
+                error={
+                    "code": (
+                        "ResponseTooLarge"
+                        if isinstance(exc, ResponseTooLargeError)
+                        else type(exc).__name__
+                    ),
+                    "message": str(exc) or "response exceeded the configured limit",
+                },
                 retry_safe=(
                     bool(command.idempotency_key) or tool.side_effect == "read"
                 ),
             )
+
+
+class ResponseTooLargeError(ValueError):
+    pass

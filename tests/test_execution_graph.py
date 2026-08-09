@@ -3,6 +3,7 @@ import httpx
 from app.command_center.execution_graph import (
     ExecutionDependencies,
     LocalBusinessReader,
+    UserRequestReader,
     build_execution_graph,
 )
 from app.command_center.schemas import (
@@ -134,6 +135,24 @@ def test_execution_graph_executes_selected_skill_and_verifies_result():
     assert result["final_response"]["summary"] == "采购申请创建完成"
     assert runner.tasks[0]["system_code"] == "connected_system"
     assert runner.literals[0]["item_name"] == "打印纸"
+
+
+def test_execution_graph_merges_agent_inputs_into_generic_task_context():
+    runner = RecordingRunner()
+    graph = build_execution_graph(
+        ExecutionDependencies(
+            skills=lambda: [published_skill()],
+            business_reader=UserRequestReader(),
+            agents=MatchingAgent(["user-request"]),
+            runner=runner,
+        )
+    )
+
+    result = graph.invoke({"user_request": "查询第二页采购申请"})
+
+    assert result["status"] == "succeeded"
+    assert runner.tasks[0]["content"]["item_name"] == "打印纸"
+    assert runner.tasks[0]["user_request"] == "查询第二页采购申请"
 
 
 def test_local_business_reader_builds_procurement_input_without_task_api():

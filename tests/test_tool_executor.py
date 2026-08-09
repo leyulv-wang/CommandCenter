@@ -221,3 +221,86 @@ def test_allowlisted_get_declared_write_is_not_implicitly_safe():
 
     assert result.side_effect["occurred"] is True
     assert result.retry_safe is False
+
+
+def test_executor_invalidates_saved_credential_after_unauthorized_response():
+    invalidated = []
+    catalog = ToolCatalog(
+        [
+            ToolDefinition(
+                tool_id="mes:list",
+                system_code="mes",
+                operation_id="list",
+                method="GET",
+                base_url="https://mes.test",
+                path_template="/list",
+                content_type=None,
+                side_effect="read",
+                credential_header="X-Access-Token",
+            )
+        ]
+    )
+
+    result = ToolExecutor(
+        catalog,
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(401, json={"detail": "expired"})
+            )
+        ),
+        credential_provider=lambda _: {"X-Access-Token": "private-secret"},
+        credential_invalidator=invalidated.append,
+    ).execute(
+        ExecutionCommand(
+            run_id=uuid4(),
+            skill_id=uuid4(),
+            skill_version=1,
+            step_id="query",
+            tool_id="mes:list",
+            arguments={},
+            reason="查询",
+        )
+    )
+
+    assert result.status == "failed"
+    assert invalidated == ["mes"]
+    assert "private-secret" not in result.model_dump_json()
+
+
+def test_executor_rejects_a_response_larger_than_the_profile_limit():
+    catalog = ToolCatalog(
+        [
+            ToolDefinition(
+                tool_id="mes:list",
+                system_code="mes",
+                operation_id="list",
+                method="GET",
+                base_url="https://mes.test",
+                path_template="/list",
+                content_type=None,
+                side_effect="read",
+                max_response_bytes=16,
+            )
+        ]
+    )
+    result = ToolExecutor(
+        catalog,
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"records": ["x" * 50]})
+            )
+        ),
+    ).execute(
+        ExecutionCommand(
+            run_id=uuid4(),
+            skill_id=uuid4(),
+            skill_version=1,
+            step_id="query",
+            tool_id="mes:list",
+            arguments={},
+            reason="查询",
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.error["code"] == "ResponseTooLarge"

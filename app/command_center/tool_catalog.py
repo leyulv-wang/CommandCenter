@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass, field
+from collections.abc import Callable
 from typing import Any, Literal
 
 from app.command_center.system_profiles import SystemProfile
@@ -37,6 +38,7 @@ class ToolDefinition:
     body_schema: dict[str, Any] = field(default_factory=dict)
     credential_header: str | None = None
     parameters: tuple[ToolParameter, ...] = ()
+    max_response_bytes: int = 8 * 1024 * 1024
 
     def with_path_parameters(self, values: dict[str, str]) -> ToolDefinition:
         return ToolDefinition(
@@ -54,6 +56,7 @@ class ToolDefinition:
             body_schema=self.body_schema,
             credential_header=self.credential_header,
             parameters=self.parameters,
+            max_response_bytes=self.max_response_bytes,
         )
 
 
@@ -94,6 +97,7 @@ class ToolCatalog:
                             base_url=base_urls[system_code],
                             side_effect="write",
                             credential_header=None,
+                            max_response_bytes=8 * 1024 * 1024,
                         )
                     )
         return cls(tools)
@@ -124,6 +128,7 @@ class ToolCatalog:
                         base_url=str(profile.base_url),
                         side_effect=permission.side_effect,
                         credential_header=profile.credential_header,
+                        max_response_bytes=profile.limits.max_response_bytes,
                     )
                 )
         return cls(tools)
@@ -133,6 +138,9 @@ class ToolCatalog:
             return self._tools[tool_id]
         except KeyError as exc:
             raise KeyError(f"Tool is not allowlisted: {tool_id}") from exc
+
+    def definitions(self) -> tuple[ToolDefinition, ...]:
+        return tuple(self._tools.values())
 
     def to_agent_payload(self) -> dict[str, Any]:
         return {
@@ -177,6 +185,43 @@ class ToolCatalog:
         return None
 
 
+class RoutingToolCatalog:
+    """Resolve Tools from a local catalog and lazily loaded system catalogs."""
+
+    def __init__(
+        self,
+        local: ToolCatalog,
+        system_catalog: Callable[[str], ToolCatalog],
+    ) -> None:
+        self._local = local
+        self._system_catalog = system_catalog
+        self._resolved: dict[str, ToolCatalog] = {}
+
+    def get(self, tool_id: str) -> ToolDefinition:
+        try:
+            return self._local.get(tool_id)
+        except KeyError:
+            pass
+        system_code, separator, _ = tool_id.partition(":")
+        if not separator:
+            raise KeyError(f"Tool is not allowlisted: {tool_id}")
+        catalog = self._resolved.get(system_code)
+        if catalog is None:
+            catalog = self._system_catalog(system_code)
+            self._resolved[system_code] = catalog
+        return catalog.get(tool_id)
+
+    def definitions(self) -> tuple[ToolDefinition, ...]:
+        return (
+            *self._local.definitions(),
+            *(
+                tool
+                for catalog in self._resolved.values()
+                for tool in catalog.definitions()
+            ),
+        )
+
+
 def _tool_from_operation(
     *,
     document: dict[str, Any],
@@ -188,6 +233,7 @@ def _tool_from_operation(
     base_url: str,
     side_effect: Literal["read", "write"],
     credential_header: str | None,
+    max_response_bytes: int,
 ) -> ToolDefinition:
     parameter_items = _merged_parameter_items(path_item, operation)
     parameters = _tool_parameters(parameter_items)
@@ -210,6 +256,7 @@ def _tool_from_operation(
         body_schema=body_schema,
         credential_header=credential_header,
         parameters=parameters,
+        max_response_bytes=max_response_bytes,
     )
 
 

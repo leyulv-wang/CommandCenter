@@ -1,5 +1,6 @@
 import json
 import logging
+from threading import RLock
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -13,8 +14,9 @@ from app.agent.graph import form_execution_graph
 from app.command_center.agents import AgentSuite
 from app.command_center.execution_graph import (
     ExecutionDependencies,
-    LocalBusinessReader,
+    UserRequestReader,
     build_execution_graph,
+    executable_skill_set,
 )
 from app.command_center.learning_graph import LearningDependencies, build_learning_graph
 from app.command_center.credential_vault import EphemeralCredentialVault
@@ -36,7 +38,7 @@ from app.command_center.testing import (
     SkillRunner,
 )
 from app.command_center.system_profiles import SystemProfile, load_system_profile
-from app.command_center.tool_catalog import ToolCatalog
+from app.command_center.tool_catalog import RoutingToolCatalog, ToolCatalog
 from app.command_center.tool_executor import ToolExecutor
 from app.ai_config.generator import generate_form_config
 from app.ai_config.schemas import (
@@ -62,11 +64,20 @@ class ProfileCatalogRegistry:
     ) -> None:
         self.profiles = profiles
         self.loader = loader
+        self._cache: dict[str, ToolCatalog] = {}
+        self._lock = RLock()
 
     def get(self, system_code: str) -> ToolCatalog:
+        with self._lock:
+            cached = self._cache.get(system_code)
+            if cached is not None:
+                return cached
         profile = self.profiles[system_code]
         document = self.loader.load(profile)
-        return ToolCatalog.from_system_profile(document, profile)
+        catalog = ToolCatalog.from_system_profile(document, profile)
+        with self._lock:
+            self._cache[system_code] = catalog
+        return catalog
 
 
 @dataclass
@@ -365,16 +376,6 @@ def build_command_center_components(
             publish_policy="auto_publish",
         )
     )
-    if execution_graph is None:
-        execution_graph = build_execution_graph(
-            ExecutionDependencies(
-                skills=repository.list_published_skills,
-                business_reader=LocalBusinessReader(client, base_urls),
-                agents=agents,
-                runner=local_runner,
-            )
-        )
-
     credential_vault = EphemeralCredentialVault()
     system_credential_store = KeyringSystemCredentialStore(profiles)
     connection_handshakes = ConnectionHandshakeStore()
@@ -382,6 +383,32 @@ def build_command_center_components(
         catalog_provider=lambda profile: catalogs.get(profile.system_code),
         credential_vault=credential_vault,
     )
+
+    execution_catalog = RoutingToolCatalog(local_catalog, catalogs.get)
+
+    def executable_skills():
+        return executable_skill_set(
+            repository.list_published_skills(),
+            repository.list_verified_candidates(),
+            execution_catalog,
+        )
+
+    if execution_graph is None:
+        execution_graph = build_execution_graph(
+            ExecutionDependencies(
+                skills=executable_skills,
+                business_reader=UserRequestReader(),
+                agents=agents,
+                runner=SkillRunner(
+                    ToolExecutor(
+                        execution_catalog,
+                        client,
+                        credential_provider=system_credential_store.headers_for,
+                        credential_invalidator=system_credential_store.delete,
+                    )
+                ),
+            )
+        )
 
     def readonly_tester_factory(
         system_code: str,
@@ -416,6 +443,7 @@ def build_command_center_components(
             catalog,
             client,
             credential_provider=system_credential_store.headers_for,
+            credential_invalidator=system_credential_store.delete,
         )
         return ReadOnlySkillTestService(
             catalog=catalog,

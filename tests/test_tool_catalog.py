@@ -79,8 +79,30 @@ def test_swagger2_query_parameters_enter_allowlisted_tool():
         ("X-Tenant-Id", "header"),
     }
     assert tool.credential_header == "X-Access-Token"
+    assert tool.max_response_bytes == 1_024
     with pytest.raises(KeyError):
         catalog.get("yifeng_mes:auditPurchaseApply")
+
+
+def test_catalog_exposes_an_immutable_definition_snapshot():
+    catalog = ToolCatalog.from_system_profile(
+        {
+            "swagger": "2.0",
+            "paths": {
+                "/jeecg-boot/purchase/apply/list": {
+                    "get": {"operationId": "listPurchaseApply"}
+                }
+            },
+        },
+        profile_for(
+            "GET", "/jeecg-boot/purchase/apply/list", side_effect="read"
+        ),
+    )
+
+    definitions = catalog.definitions()
+
+    assert isinstance(definitions, tuple)
+    assert definitions[0].tool_id == "yifeng_mes:listPurchaseApply"
 
 
 def test_swagger2_permission_requires_exact_method_and_path():

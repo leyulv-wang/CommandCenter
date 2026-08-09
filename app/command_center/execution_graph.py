@@ -68,8 +68,47 @@ class LocalBusinessReader:
         }
 
 
+class UserRequestReader:
+    """Create one neutral execution object for an employee's direct request."""
+
+    def search_tasks(self, user_request: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "system_code": "command_center",
+                "task_id": "user-request",
+                "content": {},
+                "user_request": user_request,
+            }
+        ]
+
+    def observe(self, task: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "request": task,
+            "observation_source": "executed_tool_results",
+        }
+
+
 class Runner(Protocol):
     def run(self, skill, task, *, run_id, literals=None) -> SkillRunResult: ...
+
+
+def executable_skill_set(
+    published: list[SkillDefinition],
+    verified_candidates: list[SkillDefinition],
+    catalog: Any,
+) -> list[SkillDefinition]:
+    verified: list[SkillDefinition] = []
+    for skill in verified_candidates:
+        try:
+            tools = [catalog.get(step.tool_id) for step in skill.steps]
+        except (KeyError, ValueError, httpx.HTTPError):
+            continue
+        if all(
+            step.side_effect == "read" and tool.side_effect == "read"
+            for step, tool in zip(skill.steps, tools, strict=True)
+        ):
+            verified.append(skill)
+    return [*published, *verified]
 
 
 @dataclass
@@ -144,21 +183,46 @@ def build_execution_graph(dependencies: ExecutionDependencies):
         )
         if skill is None:
             return {"status": "failed", "errors": ["智能体选择了未发布 Skill"]}
+        selected = dict(candidates[0])
+        selected["content"] = {
+            **dict(selected.get("content", {})),
+            **decision.literals,
+        }
         return {
             "match": decision,
             "candidate_objects": candidates,
-            "selected_object": candidates[0],
+            "selected_object": selected,
             "selected_skill": skill,
             "status": "ready",
         }
 
     def execute_skill(state: ExecutionState) -> ExecutionState:
-        result = dependencies.runner.run(
-            state["selected_skill"],
-            state["selected_object"],
-            run_id=uuid4(),
-            literals=state["match"].literals,
-        )
+        available = {
+            *state["match"].literals,
+            *dict(state["selected_object"].get("content", {})),
+        }
+        missing = [
+            item.name
+            for item in state["selected_skill"].inputs
+            if item.required and item.name not in available
+        ]
+        if missing:
+            return {
+                "status": "failed",
+                "errors": ["Skill 必填输入不完整"],
+            }
+        try:
+            result = dependencies.runner.run(
+                state["selected_skill"],
+                state["selected_object"],
+                run_id=uuid4(),
+                literals=state["match"].literals,
+            )
+        except (KeyError, ValueError):
+            return {
+                "status": "failed",
+                "errors": ["Skill 输入无法绑定到执行参数"],
+            }
         return {
             "run_result": result,
             "status": "verifying" if result.status == "succeeded" else "failed",
