@@ -1,9 +1,9 @@
 <template>
   <section class="command-panel">
     <div class="command-copy">
-      <p class="command-kicker">直接交给中控</p>
-      <h3>描述要完成的工作</h3>
-      <p>例如：处理签字笔库存不足任务</p>
+      <p class="command-kicker">中控执行</p>
+      <h2>输入任务</h2>
+      <p>用一句话描述要查询或处理的业务工作。</p>
     </div>
     <div class="command-input">
       <el-input
@@ -14,7 +14,7 @@
         placeholder="输入一项明确的业务任务"
         @keydown.ctrl.enter="submit"
       />
-      <el-button type="primary" :loading="running" @click="submit">执行任务</el-button>
+      <el-button type="primary" :loading="running" @click="submit">交给中控执行</el-button>
     </div>
 
     <div v-if="run" class="run-state">
@@ -89,21 +89,22 @@ async function chooseObject(objectId: string) {
 </script>
 
 <style scoped>
-.command-panel { background: #14213d; color: #fff; display: grid; gap: 18px; grid-template-columns: 260px 1fr; margin-bottom: 22px; padding: 24px; }
-.command-copy h3 { font-size: 21px; margin: 6px 0; }
-.command-copy p { color: #b9c5d6; line-height: 1.5; margin: 0; }
-.command-kicker { color: #67d4e5 !important; font: 700 12px Bahnschrift, sans-serif; letter-spacing: .12em; text-transform: uppercase; }
-.command-input { align-items: stretch; display: flex; gap: 10px; }
-.command-input :deep(textarea) { border: 0; border-radius: 2px; }
-.run-state { border-top: 1px solid #52617a; grid-column: 1 / -1; padding-top: 16px; }
+.command-panel { display: grid; gap: 22px; min-height: 100%; }
+.command-copy h2 { font-size: 21px; margin: 5px 0 8px; }
+.command-copy p { color: var(--muted); line-height: 1.5; margin: 0; }
+.command-kicker { color: var(--signal) !important; font: 700 12px var(--font-mono); letter-spacing: .09em; text-transform: uppercase; }
+.command-input { align-items: stretch; display: grid; gap: 10px; }
+.command-input :deep(textarea) { border: 1px solid var(--border); border-radius: 10px; box-shadow: none; min-height: 104px !important; padding: 14px; }
+.command-input :deep(.el-button) { border-radius: 9px; font-weight: 700; height: 44px; margin: 0; }
+.run-state { border-top: 1px solid var(--border); padding-top: 18px; }
 .run-state-heading { align-items: center; display: flex; gap: 9px; }
-.pulse { background: #67d4e5; border-radius: 50%; box-shadow: 0 0 0 5px rgb(103 212 229 / 18%); height: 9px; width: 9px; }
-.pulse.finished { background: #4ade80; box-shadow: none; }
-.run-state p { color: #d7e0ec; margin-bottom: 0; }
-.run-error { color: #fecaca !important; }
+.pulse { background: var(--signal); border-radius: 50%; box-shadow: 0 0 0 5px var(--signal-soft); height: 9px; width: 9px; }
+.pulse.finished { background: var(--success); box-shadow: none; }
+.run-state p { color: var(--muted); margin-bottom: 0; }
+.run-error { color: var(--danger) !important; }
 .object-choice { display: grid; gap: 8px; margin-top: 14px; }
-.object-choice button { background: #fff; border: 0; color: #14213d; cursor: pointer; display: flex; justify-content: space-between; padding: 12px 14px; text-align: left; }
-.object-choice small { color: #64748b; }
+.object-choice button { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--ink); cursor: pointer; display: flex; justify-content: space-between; padding: 12px 14px; text-align: left; }
+.object-choice small { color: var(--muted); }
 @media (max-width: 760px) {
   .command-panel { grid-template-columns: 1fr; }
   .command-input { flex-direction: column; }

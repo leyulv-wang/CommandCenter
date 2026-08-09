@@ -1,5 +1,10 @@
 import { request } from './client'
-import type { RecordingSummary, RecordingView, TaskRunView } from './types'
+import type {
+  ExtensionRecordingDetail,
+  RecordingSummary,
+  RecordingView,
+  TaskRunView,
+} from './types'
 
 
 export function createRecording(payload: {
@@ -22,7 +27,7 @@ export function stopRecording(recordingId: string) {
 }
 
 export function getRecording(recordingId: string) {
-  return request<RecordingView>(`/recordings/${recordingId}`)
+  return request<ExtensionRecordingDetail>(`/recordings/${recordingId}`)
 }
 
 export function listRecordings(limit = 1) {
