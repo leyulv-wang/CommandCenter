@@ -12,6 +12,10 @@ from fastapi.encoders import jsonable_encoder
 
 from app.command_center.repository import CommandCenterRepository
 from app.command_center.schemas import ExtensionEventBatch
+from app.command_center.system_connections import (
+    ConnectionHandshakeStore,
+    SystemCredentialStore,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -59,6 +63,8 @@ class CommandCenterService:
         system_profiles: dict[str, Any] | None = None,
         learning_graph_factory: Any | None = None,
         browser_skill_distiller: Any | None = None,
+        system_credential_store: SystemCredentialStore | None = None,
+        connection_handshakes: ConnectionHandshakeStore | None = None,
     ):
         self.repository = repository
         self.recorder = recorder
@@ -68,8 +74,65 @@ class CommandCenterService:
         self.system_profiles = system_profiles or {}
         self.learning_graph_factory = learning_graph_factory
         self.browser_skill_distiller = browser_skill_distiller
+        self.system_credential_store = system_credential_store
+        self.connection_handshakes = connection_handshakes
         self._analysis_lock = threading.Lock()
         self._active_analyses: set[UUID] = set()
+
+    def begin_system_connection(self, system_code: str) -> dict[str, Any]:
+        profile = self._system_profile(system_code)
+        if self.connection_handshakes is None:
+            raise RuntimeError("system connections are not configured")
+        return {
+            "system_code": system_code,
+            "display_name": profile.display_name,
+            "connection_token": self.connection_handshakes.begin(system_code),
+        }
+
+    def put_system_credential(
+        self,
+        system_code: str,
+        name: str,
+        secret: Any,
+        connection_token: str,
+    ) -> dict[str, Any]:
+        self._system_profile(system_code)
+        if (
+            self.connection_handshakes is None
+            or not self.connection_handshakes.authorize(system_code, connection_token)
+        ):
+            raise PermissionError("connection authorization failed")
+        if self.system_credential_store is None:
+            raise RuntimeError("system credential storage is not configured")
+        self.system_credential_store.put(system_code, name, secret)
+        return self.get_system_connection(system_code)
+
+    def get_system_connection(self, system_code: str) -> dict[str, Any]:
+        profile = self._system_profile(system_code)
+        connected = bool(
+            self.system_credential_store
+            and self.system_credential_store.has(system_code)
+        )
+        return {
+            "system_code": system_code,
+            "display_name": profile.display_name,
+            "status": "connected" if connected else "disconnected",
+            "credential_source": "windows_keyring",
+        }
+
+    def disconnect_system(self, system_code: str) -> dict[str, Any]:
+        self._system_profile(system_code)
+        if self.system_credential_store is not None:
+            self.system_credential_store.delete(system_code)
+        if self.connection_handshakes is not None:
+            self.connection_handshakes.clear(system_code)
+        return self.get_system_connection(system_code)
+
+    def _system_profile(self, system_code: str) -> Any:
+        try:
+            return self.system_profiles[system_code]
+        except KeyError as exc:
+            raise KeyError(f"unknown system profile: {system_code}") from exc
 
     def create_recording(self, request: Any) -> dict[str, Any]:
         recording_id = uuid4()

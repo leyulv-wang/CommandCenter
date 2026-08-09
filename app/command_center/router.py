@@ -25,6 +25,11 @@ class ExtensionAbortRequest(BaseModel):
     reason: Literal["no_uploadable_evidence", "upload_failed"]
 
 
+class SystemCredentialRequest(BaseModel):
+    name: EvidenceIdentifier
+    secret: SecretStr
+
+
 class CreateTaskRunRequest(BaseModel):
     user_request: str = Field(min_length=1)
 
@@ -49,6 +54,63 @@ def _safe_validation_issues(error: ValidationError) -> list[dict[str, str]]:
 
 def create_router(service_provider: Callable[[], Any]) -> APIRouter:
     router = APIRouter()
+
+    @router.post(
+        "/system-connections/{system_code}/begin",
+        status_code=status.HTTP_201_CREATED,
+    )
+    def begin_system_connection(
+        system_code: str,
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.begin_system_connection(system_code)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.put(
+        "/system-connections/{system_code}/credential",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def put_system_credential(
+        system_code: str,
+        request: SystemCredentialRequest,
+        connection_token: str = Header(alias="X-CommandCenter-Connection-Token"),
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.put_system_credential(
+                system_code,
+                request.name,
+                request.secret,
+                connection_token,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=401, detail="connection authorization failed") from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.get("/system-connections/{system_code}")
+    def get_system_connection(
+        system_code: str,
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.get_system_connection(system_code)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.delete("/system-connections/{system_code}")
+    def disconnect_system(
+        system_code: str,
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.disconnect_system(system_code)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.get("/recordings")
     def list_recordings(

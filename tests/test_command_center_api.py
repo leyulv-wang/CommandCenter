@@ -89,6 +89,39 @@ class FakeCommandCenterService:
     def get_task_run(self, run_id):
         return {"run_id": str(run_id), "status": "succeeded"}
 
+    def begin_system_connection(self, system_code):
+        return {
+            "system_code": system_code,
+            "display_name": "益丰 MES",
+            "connection_token": "one-time-connection-token",
+        }
+
+    def put_system_credential(self, system_code, name, secret, token):
+        assert token == "one-time-connection-token"
+        self.system_credential_name = name
+        return {
+            "system_code": system_code,
+            "display_name": "益丰 MES",
+            "status": "connected",
+            "credential_source": "windows_keyring",
+        }
+
+    def get_system_connection(self, system_code):
+        return {
+            "system_code": system_code,
+            "display_name": "益丰 MES",
+            "status": "connected",
+            "credential_source": "windows_keyring",
+        }
+
+    def disconnect_system(self, system_code):
+        return {
+            "system_code": system_code,
+            "display_name": "益丰 MES",
+            "status": "disconnected",
+            "credential_source": "windows_keyring",
+        }
+
 
 def client_for(service):
     app = FastAPI()
@@ -127,6 +160,29 @@ def test_task_run_accepts_natural_language_request():
     assert response.status_code == 201
     assert response.json()["status"] == "succeeded"
     assert response.json()["final_response"]["summary"] == "采购创建并回写完成"
+
+
+def test_system_connection_api_never_returns_the_submitted_credential():
+    service = FakeCommandCenterService()
+    client = client_for(service)
+
+    begun = client.post('/system-connections/yifeng_mes/begin')
+    token = begun.json()['connection_token']
+    connected = client.put(
+        '/system-connections/yifeng_mes/credential',
+        headers={'X-CommandCenter-Connection-Token': token},
+        json={'name': 'X-Access-Token', 'secret': 'raw-private-token'},
+    )
+    status = client.get('/system-connections/yifeng_mes')
+    disconnected = client.delete('/system-connections/yifeng_mes')
+
+    assert begun.status_code == 201
+    assert connected.status_code == 202
+    assert status.json()['status'] == 'connected'
+    assert disconnected.json()['status'] == 'disconnected'
+    assert service.system_credential_name == 'X-Access-Token'
+    assert 'raw-private-token' not in connected.text
+    assert 'raw-private-token' not in status.text
 
 
 def test_extension_api_separates_evidence_and_plaintext_credential():

@@ -18,6 +18,10 @@ from app.command_center.execution_graph import (
 )
 from app.command_center.learning_graph import LearningDependencies, build_learning_graph
 from app.command_center.credential_vault import EphemeralCredentialVault
+from app.command_center.system_connections import (
+    ConnectionHandshakeStore,
+    KeyringSystemCredentialStore,
+)
 from app.command_center.extension_recorder import ExtensionRecorder
 from app.command_center.model import StructuredModel
 from app.command_center.openapi_loader import OpenAPIDocumentLoader
@@ -75,6 +79,8 @@ class CommandCenterComponents:
     readonly_tester_factory: Any
     learning_graph_factory: Any
     service: CommandCenterService
+    system_credential_store: KeyringSystemCredentialStore
+    connection_handshakes: ConnectionHandshakeStore
 
 app.add_middleware(
     CORSMiddleware,
@@ -370,6 +376,8 @@ def build_command_center_components(
         )
 
     credential_vault = EphemeralCredentialVault()
+    system_credential_store = KeyringSystemCredentialStore(profiles)
+    connection_handshakes = ConnectionHandshakeStore()
     extension_recorder = ExtensionRecorder(
         catalog_provider=lambda profile: catalogs.get(profile.system_code),
         credential_vault=credential_vault,
@@ -414,6 +422,8 @@ def build_command_center_components(
         system_profiles=profiles,
         learning_graph_factory=learning_graph_factory,
         browser_skill_distiller=agents,
+        system_credential_store=system_credential_store,
+        connection_handshakes=connection_handshakes,
     )
     return CommandCenterComponents(
         profiles=profiles,
@@ -424,6 +434,8 @@ def build_command_center_components(
         readonly_tester_factory=readonly_tester_factory,
         learning_graph_factory=learning_graph_factory,
         service=service,
+        system_credential_store=system_credential_store,
+        connection_handshakes=connection_handshakes,
     )
 
 
