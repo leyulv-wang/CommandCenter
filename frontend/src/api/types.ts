@@ -153,6 +153,23 @@ export interface RecordingSummary {
     | 'failed'
 }
 
+export interface CandidateSkillSummary {
+  name: string
+  status: string
+  executionVerification?: string
+}
+
+export interface ExtensionRecordingDetail extends RecordingSummary {
+  learning_result?: {
+    final_status?: string
+    execution_verification?: string
+    candidate_skill?: {
+      name?: string
+      status?: string
+    }
+  }
+}
+
 export interface TaskRunView {
   run_id: string
   user_request: string
