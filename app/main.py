@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent.graph import form_execution_graph
 from app.command_center.agents import AgentSuite
+from app.command_center.agent_runtime_factory import build_agent_runtime
 from app.command_center.execution_graph import (
     ExecutionDependencies,
     UserRequestReader,
@@ -318,7 +319,12 @@ def build_command_center_components(
 
     client = client or httpx.Client(timeout=30)
     repository = repository or CommandCenterRepository(database_url)
-    agents = agents or AgentSuite(StructuredModel.from_environment())
+    if agents is None:
+        structured_model = StructuredModel.from_environment()
+        agents = AgentSuite(
+            structured_model,
+            match_runtime=build_agent_runtime(structured_model),
+        )
     profiles = profiles or {
         "connected_system": load_system_profile(
             Path("app/data/system_profiles/connected_system.json")
