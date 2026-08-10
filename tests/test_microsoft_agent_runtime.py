@@ -93,6 +93,13 @@ def test_from_openai_compatible_builds_fixed_version_agent_factory(monkeypatch):
         model="provider-model",
         timeout_seconds=12.5,
     )
+    real_agent_factory = runtime._agent_factory
+
+    def capture_agent_factory(request, tools, observer):
+        calls["observer"] = observer
+        return real_agent_factory(request, tools, observer)
+
+    runtime._agent_factory = capture_agent_factory
     result = runtime.run_structured(make_request())
 
     assert calls["async_client"] == {
@@ -104,15 +111,14 @@ def test_from_openai_compatible_builds_fixed_version_agent_factory(monkeypatch):
         "async_client": calls["async_client_instance"],
         "model": "provider-model",
     }
-    assert calls["agent_factory"] == {
+    agent_factory_args = calls["agent_factory"]
+    assert agent_factory_args == {
         "name": "task_matcher",
         "instructions": "match",
         "tools": [],
         "default_options": {"temperature": 0},
-        "middleware": calls["agent_factory"]["middleware"],
+        "middleware": [calls["observer"].chat_middleware],
     }
-    assert len(calls["agent_factory"]["middleware"]) == 1
-    assert callable(calls["agent_factory"]["middleware"][0])
     assert runtime.default_limits == RuntimeLimits(timeout_seconds=12.5)
     assert result.telemetry.provider == "openai_compatible"
     assert result.telemetry.model == "provider-model"
