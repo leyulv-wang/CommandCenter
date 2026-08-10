@@ -102,3 +102,68 @@ def test_skill_runner_stops_after_failed_write():
 
     assert result.status == "failed"
     assert len(executor.commands) == 1
+
+
+def test_skill_runner_omits_unprovided_optional_inputs_from_tool_arguments():
+    skill = SkillDefinition.model_validate(
+        {
+            "skill_id": str(uuid4()),
+            "version": 1,
+            "name": "查询采购申请列表",
+            "description": "按可选条件分页查询",
+            "status": "verified_candidate",
+            "trigger_examples": ["查询采购申请"],
+            "source_recording_id": str(uuid4()),
+            "inputs": [
+                {
+                    "name": "applyNo",
+                    "type": "string",
+                    "description": "申请单号",
+                    "required": False,
+                },
+                {
+                    "name": "pageNo",
+                    "type": "integer",
+                    "description": "页码",
+                    "required": True,
+                },
+                {
+                    "name": "pageSize",
+                    "type": "integer",
+                    "description": "每页条数",
+                    "required": True,
+                },
+            ],
+            "outputs": [],
+            "steps": [
+                {
+                    "step_id": "query",
+                    "name": "查询",
+                    "tool_id": "mes:list",
+                    "input_bindings": {
+                        "query.applyNo": "task.content.applyNo",
+                        "query.pageNo": "task.content.pageNo",
+                        "query.pageSize": "task.content.pageSize",
+                    },
+                    "side_effect": "read",
+                }
+            ],
+            "success_conditions": [],
+        }
+    )
+    executor = RecordingExecutor()
+
+    result = SkillRunner(executor).run(
+        skill,
+        {
+            "system_code": "command_center",
+            "task_id": "user-request",
+            "content": {"pageNo": 1, "pageSize": 10},
+        },
+        run_id=uuid4(),
+    )
+
+    assert result.status == "succeeded"
+    assert executor.commands[0].arguments == {
+        "query": {"pageNo": 1, "pageSize": 10}
+    }

@@ -42,14 +42,31 @@ class SkillRunner:
             "steps": {},
             "literal": literals or {},
         }
+        optional_bindings = {
+            expression
+            for item in skill.inputs
+            if not item.required
+            for expression in (
+                f"literal.{item.name}",
+                f"task.content.{item.name}",
+            )
+        }
         results: list[StepResult] = []
         for step in skill.steps:
             arguments: dict[str, Any] = {}
             for target, expression in step.input_bindings.items():
+                try:
+                    value = BindingResolver.resolve(expression, context)
+                except KeyError:
+                    if expression in optional_bindings:
+                        continue
+                    raise
+                if value is None and expression in optional_bindings:
+                    continue
                 _set_nested(
                     arguments,
                     target.split("."),
-                    BindingResolver.resolve(expression, context),
+                    value,
                 )
             idempotency_key = None
             if step.side_effect == "write":
