@@ -32,6 +32,7 @@ class RuntimeRequest(Generic[SchemaT]):
     payload: Any
     output_schema: type[SchemaT]
     tools: tuple[RuntimeTool, ...] = ()
+    requires_tool_evidence: bool = False
     session_id: str | None = None
     limits: RuntimeLimits = field(default_factory=RuntimeLimits)
 

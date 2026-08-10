@@ -73,6 +73,7 @@ def test_tool_loop_runtime_discovers_call_scoped_skills_without_prompt_injection
         "list_available_skills",
         "get_available_skill",
     ]
+    assert runtime.requests[0].requires_tool_evidence is True
 
 
 class OutputRuntime:

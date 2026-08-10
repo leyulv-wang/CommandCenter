@@ -44,13 +44,14 @@ class FakeAgent:
         )
 
 
-def make_request(*, tools=(), timeout=1.0, limits=None):
+def make_request(*, tools=(), timeout=1.0, limits=None, requires_tool_evidence=False):
     return RuntimeRequest(
         role="task_matcher",
         instructions="match",
         payload={"user_request": "处理任务", "tasks": [{"task_id": "TASK-1"}]},
         output_schema=TaskMatchDecision,
         tools=tools,
+        requires_tool_evidence=requires_tool_evidence,
         session_id="session-1",
         limits=limits or RuntimeLimits(timeout_seconds=timeout),
     )
@@ -490,6 +491,94 @@ def test_real_framework_owns_list_detail_final_tool_loop():
     assert result.telemetry.usage.total_tokens == 45
 
     asyncio.run(async_client.close())
+
+
+def test_required_tool_evidence_separates_tool_call_from_structured_decision():
+    skill_id = "00000000-0000-0000-0000-000000000001"
+    requests = []
+    responses = iter(
+        [
+            completion(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-list",
+                            "type": "function",
+                            "function": {
+                                "name": "list_available_skills",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                },
+                "tool_calls",
+                "response-tool",
+            ),
+            completion(
+                {"role": "assistant", "content": json.dumps(output_for(skill_id))},
+                "stop",
+                "response-final",
+            ),
+        ]
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=next(responses))
+
+    async_client = AsyncOpenAI(
+        api_key="test-key",
+        base_url="http://test/v1",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    client = OpenAIChatCompletionClient(async_client=async_client, model="test-model")
+
+    def list_available_skills():
+        return [{"skill_id": skill_id, "name": "Skill"}]
+
+    def agent_factory(request, tools, observer):
+        return client.as_agent(
+            name=request.role,
+            instructions=request.instructions,
+            tools=list(tools),
+            default_options={"temperature": 0},
+            middleware=[observer.chat_middleware],
+        )
+
+    runtime = MicrosoftAgentFrameworkRuntime(
+        agent_factory=agent_factory,
+        provider="openai_compatible",
+        model="test-model",
+    )
+    result = runtime.run_structured(
+        make_request(
+            tools=(list_available_skills,),
+            requires_tool_evidence=True,
+        )
+    )
+
+    assert "response_format" not in requests[0]
+    assert requests[1]["response_format"]["type"] == "json_schema"
+    assert [event.name for event in result.telemetry.tool_events] == [
+        "list_available_skills"
+    ]
+    asyncio.run(async_client.close())
+
+
+def test_required_tool_evidence_rejects_request_without_tools():
+    runtime = MicrosoftAgentFrameworkRuntime(
+        agent_factory=lambda request, tools, observer: FakeAgent(
+            output_for("00000000-0000-0000-0000-000000000001")
+        ),
+        provider="openai_compatible",
+        model="test-model",
+    )
+
+    with pytest.raises(RuntimeConfigurationError, match="requires at least one tool"):
+        runtime.run_structured(make_request(requires_tool_evidence=True))
 
 
 def make_real_runtime(response_payloads, requests, observers=None):

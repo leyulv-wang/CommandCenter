@@ -5,6 +5,7 @@ import inspect
 import json
 import math
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from functools import wraps
 from threading import Lock
 from time import perf_counter
@@ -103,10 +104,28 @@ class MicrosoftAgentFrameworkRuntime:
         limits = _bounded_limits(
             request.limits, timeout_ceiling=self.default_limits.timeout_seconds
         )
-        observer = _RunObserver(limits)
+        if request.requires_tool_evidence and not request.tools:
+            raise RuntimeConfigurationError(
+                "required tool evidence requires at least one tool"
+            )
+        observer = _RunObserver(
+            limits,
+            requires_tool_evidence=request.requires_tool_evidence,
+            response_format=request.output_schema,
+        )
         tools = tuple(observer.wrap_tool(tool) for tool in request.tools)
+        agent_request = request
+        if request.requires_tool_evidence:
+            agent_request = replace(
+                request,
+                instructions=(
+                    request.instructions
+                    + "\n在生成最终答案前，必须先调用至少一个所提供的工具获取本次请求的事实证据；"
+                    "不得根据工具名称猜测结果。"
+                ),
+            )
         try:
-            agent = self._agent_factory(request, tools, observer)
+            agent = self._agent_factory(agent_request, tools, observer)
         except Exception as exc:
             _attach_failure(
                 exc,
@@ -219,8 +238,16 @@ class MicrosoftAgentFrameworkRuntime:
 
 
 class _RunObserver:
-    def __init__(self, limits: RuntimeLimits) -> None:
+    def __init__(
+        self,
+        limits: RuntimeLimits,
+        *,
+        requires_tool_evidence: bool = False,
+        response_format: type[BaseModel] | None = None,
+    ) -> None:
         self.limits = limits
+        self.requires_tool_evidence = requires_tool_evidence
+        self.response_format = response_format
         self.model_calls = 0
         self.tool_calls = 0
         self.events: list[RuntimeToolEvent] = []
@@ -237,6 +264,11 @@ class _RunObserver:
         self, context: ChatContext, call_next: Callable[[], Any]
     ) -> None:
         self.before_model_call()
+        if self.requires_tool_evidence:
+            if self.tool_calls == 0:
+                context.options.pop("response_format", None)
+            else:
+                context.options["response_format"] = self.response_format
         await call_next()
 
     @framework_function_middleware

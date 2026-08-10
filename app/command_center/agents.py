@@ -325,6 +325,7 @@ class AgentSuite:
                     payload=payload,
                     output_schema=TaskMatchDecision,
                     tools=tools,
+                    requires_tool_evidence=bool(tools),
                     session_id=str(uuid4()),
                     limits=self.match_runtime.default_limits,
                 )
