@@ -101,7 +101,7 @@ async function chooseObject(objectId: string) {
 .command-input { align-items: stretch; display: grid; gap: 10px; }
 .command-input :deep(textarea) { border: 1px solid var(--border); border-radius: 10px; box-shadow: none; min-height: 104px !important; padding: 14px; }
 .command-input :deep(.el-button) { border-radius: 9px; font-weight: 700; height: 44px; margin: 0; }
-.run-state { border-top: 1px solid var(--border); padding-top: 18px; }
+.run-state { border-top: 1px solid var(--border); min-width: 0; padding-top: 18px; }
 .run-state-heading { align-items: center; display: flex; gap: 9px; }
 .pulse { background: var(--signal); border-radius: 50%; box-shadow: 0 0 0 5px var(--signal-soft); height: 9px; width: 9px; }
 .pulse.finished { background: var(--success); box-shadow: none; }

@@ -32,7 +32,7 @@
 
     <SystemConnectionStatus />
 
-    <div class="console-grid">
+    <div class="console-grid result-focused">
       <NaturalLanguageTaskPanel />
       <LatestLearningResult :recording="selectedRecording" />
     </div>
@@ -145,8 +145,9 @@ onBeforeUnmount(clearPoll)
 .service-state.offline { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 28%, transparent); color: var(--danger); }
 .workflow-thesis { align-items: center; background: var(--ink); border-radius: 16px; color: white; display: grid; font-size: clamp(17px, 2.4vw, 26px); font-weight: 700; gap: 16px; grid-template-columns: 1fr auto 1fr auto 1fr; margin: 34px 0 22px; padding: 22px 28px; text-align: center; }
 .workflow-thesis i { color: #78d4df; font-style: normal; }
-.console-grid { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr) minmax(360px, .9fr); }
-.console-grid > * { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 26px; }
+.console-grid { display: grid; gap: 20px; }
+.console-grid.result-focused { grid-template-columns: minmax(0, 7fr) minmax(280px, 3fr); }
+.console-grid > * { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; min-width: 0; padding: 26px; }
 .connection-error { align-items: center; background: var(--danger-soft); border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); border-radius: 12px; color: var(--danger); display: flex; justify-content: space-between; margin-bottom: 20px; padding: 14px 16px; }
 .connection-error p { margin: 4px 0 0; }
 .connection-error button, .history-toolbar button { background: transparent; border: 1px solid currentColor; border-radius: 8px; color: inherit; cursor: pointer; font: 700 13px inherit; padding: 9px 12px; }
@@ -155,7 +156,7 @@ onBeforeUnmount(clearPoll)
 .history-toolbar button { color: var(--signal); }
 .history-toolbar button:disabled { cursor: wait; opacity: .55; }
 @media (max-width: 860px) {
-  .console-grid { grid-template-columns: 1fr; }
+  .console-grid.result-focused { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
   .console-shell { padding: 24px 16px 44px; }

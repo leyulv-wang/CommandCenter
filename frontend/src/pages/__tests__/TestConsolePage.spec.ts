@@ -49,6 +49,7 @@ describe('TestConsolePage', () => {
     expect(wrapper.text()).toContain('浏览器演示')
     expect(wrapper.text()).toContain('API Skill')
     expect(wrapper.text()).toContain('中控执行')
+    expect(wrapper.get('.console-grid').classes()).toContain('result-focused')
     expect(wrapper.findComponent(SystemConnectionStatus).exists()).toBe(true)
     expect(wrapper.findComponent(LatestLearningResult).props('recording')).toEqual(detail)
   })
