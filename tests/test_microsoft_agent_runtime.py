@@ -644,3 +644,116 @@ def test_real_framework_async_tool_exception_records_failure_and_stops():
         assert event.duration_ms >= 15
     finally:
         asyncio.run(async_client.close())
+
+
+def make_dynamic_callable_runtime(requests, observers, final_output):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        if len(requests) == 1:
+            advertised_name = body["tools"][0]["function"]["name"]
+            return httpx.Response(
+                200,
+                json=completion(
+                    tool_call_message(advertised_name, {}, "call-object"),
+                    "tool_calls",
+                    "response-tool",
+                ),
+            )
+        return httpx.Response(
+            200,
+            json=completion(
+                {"role": "assistant", "content": json.dumps(final_output)},
+                "stop",
+                "response-final",
+            ),
+        )
+
+    async_client = AsyncOpenAI(
+        api_key="test-key",
+        base_url="http://test/v1",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    client = OpenAIChatCompletionClient(
+        async_client=async_client, model="test-model"
+    )
+
+    def agent_factory(request, tools, observer):
+        observers.append(observer)
+        return client.as_agent(
+            name=request.role,
+            instructions=request.instructions,
+            tools=list(tools),
+            default_options={"temperature": 0},
+            middleware=[observer.chat_middleware],
+        )
+
+    return (
+        MicrosoftAgentFrameworkRuntime(
+            agent_factory=agent_factory,
+            provider="openai_compatible",
+            model="test-model",
+        ),
+        async_client,
+    )
+
+
+def test_real_framework_async_callable_object_uses_stable_name_and_true_duration():
+    class SuccessfulAsyncCallable:
+        async def __call__(self):
+            await asyncio.sleep(0.02)
+            return "done"
+
+    requests = []
+    observers = []
+    runtime, async_client = make_dynamic_callable_runtime(
+        requests,
+        observers,
+        output_for("00000000-0000-0000-0000-000000000001"),
+    )
+
+    try:
+        result = runtime.run_structured(
+            make_request(tools=(SuccessfulAsyncCallable(),))
+        )
+        assert result.output.summary == "matched"
+        assert requests[0]["tools"][0]["function"]["name"] == (
+            "SuccessfulAsyncCallable"
+        )
+        assert len(requests) == 2
+        event = observers[0].events[0]
+        assert event.name == "SuccessfulAsyncCallable"
+        assert event.status == "succeeded"
+        assert event.duration_ms >= 15
+    finally:
+        asyncio.run(async_client.close())
+
+
+def test_real_framework_async_callable_object_failure_stops_provider_and_is_timed():
+    class FailingAsyncCallable:
+        async def __call__(self):
+            await asyncio.sleep(0.02)
+            raise ValueError("callable object exploded")
+
+    requests = []
+    observers = []
+    runtime, async_client = make_dynamic_callable_runtime(
+        requests,
+        observers,
+        output_for("00000000-0000-0000-0000-000000000001"),
+    )
+
+    try:
+        with pytest.raises(ValueError, match="callable object exploded"):
+            runtime.run_structured(make_request(tools=(FailingAsyncCallable(),)))
+        assert requests[0]["tools"][0]["function"]["name"] == (
+            "FailingAsyncCallable"
+        )
+        assert len(requests) == 1
+        event = observers[0].events[0]
+        assert event.name == "FailingAsyncCallable"
+        assert event.status == "failed"
+        assert event.duration_ms >= 15
+    finally:
+        asyncio.run(async_client.close())

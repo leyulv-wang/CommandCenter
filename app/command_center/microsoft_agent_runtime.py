@@ -135,20 +135,24 @@ class _RunObserver:
             raise MiddlewareTermination("tool invocation failed") from exc
 
     def wrap_tool(self, function: RuntimeTool) -> RuntimeTool:
-        if inspect.iscoroutinefunction(function):
+        name = _callable_name(function)
+        if _is_async_callable(function):
 
             @wraps(function)
             async def wrapped_async(*args: Any, **kwargs: Any) -> Any:
                 self._reserve_tool_call()
                 started = perf_counter()
                 try:
-                    value = await function(*args, **kwargs)
+                    value = function(*args, **kwargs)
+                    if inspect.isawaitable(value):
+                        value = await value
                 except Exception:
-                    self._record_event(function.__name__, "failed", started)
+                    self._record_event(name, "failed", started)
                     raise
-                self._record_event(function.__name__, "succeeded", started)
+                self._record_event(name, "succeeded", started)
                 return value
 
+            _set_callable_name(wrapped_async, name)
             return wrapped_async
 
         @wraps(function)
@@ -158,12 +162,26 @@ class _RunObserver:
             try:
                 value = function(*args, **kwargs)
             except Exception:
-                self._record_event(function.__name__, "failed", started)
+                self._record_event(name, "failed", started)
                 raise
-            self._record_event(function.__name__, "succeeded", started)
+            if inspect.isawaitable(value):
+                return self._await_tool_result(value, name, started)
+            self._record_event(name, "succeeded", started)
             return value
 
+        _set_callable_name(wrapped, name)
         return wrapped
+
+    async def _await_tool_result(
+        self, value: Awaitable[Any], name: str, started: float
+    ) -> Any:
+        try:
+            result = await value
+        except Exception:
+            self._record_event(name, "failed", started)
+            raise
+        self._record_event(name, "succeeded", started)
+        return result
 
     def _reserve_tool_call(self) -> None:
         with self._lock:
@@ -208,6 +226,24 @@ def _usage_value(usage_details: Any, name: str) -> int | None:
     if isinstance(usage_details, Mapping):
         return usage_details.get(name)
     return getattr(usage_details, name, None)
+
+
+def _callable_name(function: RuntimeTool) -> str:
+    name = getattr(function, "__name__", None)
+    if isinstance(name, str) and name:
+        return name
+    return type(function).__name__
+
+
+def _is_async_callable(function: RuntimeTool) -> bool:
+    return inspect.iscoroutinefunction(function) or inspect.iscoroutinefunction(
+        getattr(function, "__call__", None)
+    )
+
+
+def _set_callable_name(function: RuntimeTool, name: str) -> None:
+    function.__name__ = name
+    function.__qualname__ = name
 
 
 def _bounded_limits(limits: RuntimeLimits) -> RuntimeLimits:
