@@ -35,6 +35,7 @@ describe('NaturalLanguageTaskPanel', () => {
     expect(api.createTaskRun).toHaveBeenCalledWith('查询采购申请列表')
     expect(wrapper.text()).toContain('任务已完成')
     expect(wrapper.text()).toContain('查询完成')
-    expect(wrapper.get('[data-testid="structured-output"]').text()).toContain('A-1')
+    expect(wrapper.get('table').text()).toContain('A-1')
+    expect(wrapper.get('details').attributes('open')).toBeUndefined()
   })
 })

@@ -24,11 +24,10 @@
       </div>
       <p v-if="run.final_response">{{ run.final_response.summary }}</p>
       <p v-else-if="run.errors?.length" class="run-error">{{ run.errors.join('；') }}</p>
-      <pre
+      <TaskResultTable
         v-if="run.final_response?.outputs"
-        data-testid="structured-output"
-        class="structured-output"
-      >{{ formattedOutputs }}</pre>
+        :outputs="run.final_response.outputs"
+      />
 
       <div v-if="run.status === 'needs_object_selection'" class="object-choice">
         <p>找到多条可能的任务，请选择本次要处理的一条：</p>
@@ -51,12 +50,12 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { createTaskRun, selectTaskObject } from '../api/commandCenter'
 import type { TaskRunView } from '../api/types'
+import TaskResultTable from './TaskResultTable.vue'
 
 const userRequest = ref('')
 const running = ref(false)
 const run = ref<TaskRunView | null>(null)
 const terminal = computed(() => ['succeeded', 'failed'].includes(run.value?.status || ''))
-const formattedOutputs = computed(() => JSON.stringify(run.value?.final_response?.outputs, null, 2))
 const statusLabel = computed(() => ({
   matching: '正在理解任务',
   needs_object_selection: '需要选择业务对象',
@@ -108,7 +107,6 @@ async function chooseObject(objectId: string) {
 .pulse.finished { background: var(--success); box-shadow: none; }
 .run-state p { color: var(--muted); margin-bottom: 0; }
 .run-error { color: var(--danger) !important; }
-.structured-output { background: var(--ink); border-radius: 9px; color: #dff7fa; font: 12px/1.55 var(--font-mono); margin: 14px 0 0; max-height: 280px; overflow: auto; padding: 14px; white-space: pre-wrap; word-break: break-word; }
 .object-choice { display: grid; gap: 8px; margin-top: 14px; }
 .object-choice button { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--ink); cursor: pointer; display: flex; justify-content: space-between; padding: 12px 14px; text-align: left; }
 .object-choice small { color: var(--muted); }
