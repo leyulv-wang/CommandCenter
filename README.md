@@ -79,6 +79,18 @@ AI_CONFIG_TIMEOUT_SECONDS
 
 不要把 `.env.ai` 或真实 API Key 提交到仓库。
 
+## 任务匹配运行时
+
+```text
+COMMAND_CENTER_AGENT_RUNTIME=legacy      # 默认值，也是回滚方式
+COMMAND_CENTER_AGENT_RUNTIME=microsoft   # 仅用于 AgentSuite.match_request
+```
+
+Microsoft 模式复用现有 `.env.ai` 中的 provider 配置。每次
+`match_request` 调用只保留本次会话历史，并且只暴露两个只读 Skill 工具
+（`list_available_skills`、`get_available_skill`），不提供业务执行 Tool。
+修改该值后需要重启后端。
+
 ## 启动服务
 
 在项目根目录分别启动中控和两个演示系统：
