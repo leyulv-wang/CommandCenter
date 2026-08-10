@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from types import SimpleNamespace
 
 import httpx
@@ -28,7 +29,7 @@ class FakeAgent:
         self.sessions.append(session)
         return session
 
-    async def run(self, prompt, *, session, options):
+    async def run(self, prompt, *, session, options, middleware=()):
         self.runs.append((prompt, session, options))
         return SimpleNamespace(
             value=TaskMatchDecision.model_validate(self.output),
@@ -40,7 +41,7 @@ class FakeAgent:
         )
 
 
-def make_request(*, tools=(), timeout=1.0):
+def make_request(*, tools=(), timeout=1.0, limits=None):
     return RuntimeRequest(
         role="task_matcher",
         instructions="match",
@@ -48,7 +49,7 @@ def make_request(*, tools=(), timeout=1.0):
         output_schema=TaskMatchDecision,
         tools=tools,
         session_id="session-1",
-        limits=RuntimeLimits(timeout_seconds=timeout),
+        limits=limits or RuntimeLimits(timeout_seconds=timeout),
     )
 
 
@@ -106,11 +107,13 @@ def test_microsoft_runtime_instruments_list_then_detail_tool_calls():
             super().__init__(output_for(skill_id))
             self.tools = tools
 
-        async def run(self, prompt, *, session, options):
+        async def run(self, prompt, *, session, options, middleware=()):
             summary = self.tools[0]()[0]
             detail = self.tools[1](summary["skill_id"])
             assert detail["skill_id"] == skill_id
-            return await super().run(prompt, session=session, options=options)
+            return await super().run(
+                prompt, session=session, options=options, middleware=middleware
+            )
 
     runtime = MicrosoftAgentFrameworkRuntime(
         agent_factory=lambda request, tools, observer: ToolCallingAgent(tools),
@@ -139,7 +142,7 @@ def test_microsoft_runtime_rejects_ninth_tool_call_before_handler_runs():
             super().__init__(output_for("00000000-0000-0000-0000-000000000001"))
             self.tool = tool
 
-        async def run(self, prompt, *, session, options):
+        async def run(self, prompt, *, session, options, middleware=()):
             for _ in range(9):
                 self.tool()
 
@@ -161,7 +164,7 @@ def test_microsoft_runtime_rejects_seventh_model_call_before_provider_runs():
             super().__init__(output_for("00000000-0000-0000-0000-000000000001"))
             self.observer = observer
 
-        async def run(self, prompt, *, session, options):
+        async def run(self, prompt, *, session, options, middleware=()):
             nonlocal provider_calls
 
             async def call_next():
@@ -183,7 +186,7 @@ def test_microsoft_runtime_rejects_seventh_model_call_before_provider_runs():
 
 def test_microsoft_runtime_times_out_without_fallback():
     class SlowAgent(FakeAgent):
-        async def run(self, prompt, *, session, options):
+        async def run(self, prompt, *, session, options, middleware=()):
             await asyncio.sleep(0.05)
 
     runtime = MicrosoftAgentFrameworkRuntime(
@@ -199,7 +202,7 @@ def test_microsoft_runtime_times_out_without_fallback():
 
 def test_microsoft_runtime_validates_plain_dict_response_value():
     class DictResponseAgent(FakeAgent):
-        async def run(self, prompt, *, session, options):
+        async def run(self, prompt, *, session, options, middleware=()):
             return SimpleNamespace(value=self.output, usage_details=None)
 
     fake = DictResponseAgent(output_for("00000000-0000-0000-0000-000000000001"))
@@ -313,6 +316,7 @@ def test_real_framework_owns_list_detail_final_tool_loop():
     async_client = AsyncOpenAI(
         api_key="test-key",
         base_url="http://test/v1",
+        max_retries=0,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
     client = OpenAIChatCompletionClient(
@@ -350,5 +354,293 @@ def test_real_framework_owns_list_detail_final_tool_loop():
     ]
     assert any(message["role"] == "tool" for message in requests[1]["messages"])
     assert sum(message["role"] == "tool" for message in requests[2]["messages"]) == 2
+    assert result.telemetry.usage.input_tokens == 30
+    assert result.telemetry.usage.output_tokens == 15
+    assert result.telemetry.usage.total_tokens == 45
 
     asyncio.run(async_client.close())
+
+
+def make_real_runtime(response_payloads, requests, observers=None):
+    responses = iter(response_payloads)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=next(responses))
+
+    async_client = AsyncOpenAI(
+        api_key="test-key",
+        base_url="http://test/v1",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    client = OpenAIChatCompletionClient(
+        async_client=async_client, model="test-model"
+    )
+
+    def agent_factory(request, tools, observer):
+        if observers is not None:
+            observers.append(observer)
+        return client.as_agent(
+            name=request.role,
+            instructions=request.instructions,
+            tools=list(tools),
+            default_options={"temperature": 0},
+            middleware=[observer.chat_middleware],
+        )
+
+    return (
+        MicrosoftAgentFrameworkRuntime(
+            agent_factory=agent_factory,
+            provider="openai_compatible",
+            model="test-model",
+        ),
+        async_client,
+    )
+
+
+def tool_call_message(name, arguments, call_id):
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(arguments),
+                },
+            }
+        ],
+    }
+
+
+def test_real_framework_tool_exception_fails_runtime_without_another_provider_call():
+    skill_id = "00000000-0000-0000-0000-000000000001"
+    requests = []
+    observers = []
+    runtime, async_client = make_real_runtime(
+        [
+            completion(
+                tool_call_message("failing_tool", {}, "call-fail"),
+                "tool_calls",
+                "response-fail",
+            ),
+            completion(
+                {
+                    "role": "assistant",
+                    "content": json.dumps(output_for(skill_id)),
+                },
+                "stop",
+                "response-should-not-run",
+            ),
+        ],
+        requests,
+        observers,
+    )
+
+    def failing_tool():
+        raise ValueError("tool exploded")
+
+    try:
+        with pytest.raises(ValueError, match="tool exploded"):
+            runtime.run_structured(make_request(tools=(failing_tool,)))
+        assert len(requests) == 1
+        assert [(event.name, event.status) for event in observers[0].events] == [
+            ("failing_tool", "failed")
+        ]
+    finally:
+        asyncio.run(async_client.close())
+
+
+@pytest.mark.parametrize(
+    ("requested_limit", "expected_provider_calls"),
+    [(100, 6), (2, 2)],
+)
+def test_real_framework_enforces_hard_and_lower_model_call_limits(
+    requested_limit, expected_provider_calls
+):
+    requests = []
+    response_payloads = [
+        completion(
+            tool_call_message("loop_tool", {}, f"call-{index}"),
+            "tool_calls",
+            f"response-{index}",
+        )
+        for index in range(expected_provider_calls + 1)
+    ]
+    response_payloads.append(
+        completion(
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    output_for("00000000-0000-0000-0000-000000000001")
+                ),
+            },
+            "stop",
+            "response-final",
+        )
+    )
+    runtime, async_client = make_real_runtime(response_payloads, requests)
+
+    def loop_tool():
+        return "continue"
+
+    try:
+        with pytest.raises(RuntimeLimitError, match="model call limit"):
+            runtime.run_structured(
+                make_request(
+                    tools=(loop_tool,),
+                    limits=RuntimeLimits(
+                        max_model_calls=requested_limit,
+                        max_tool_calls=100,
+                        timeout_seconds=1,
+                    ),
+                )
+            )
+        assert len(requests) == expected_provider_calls
+    finally:
+        asyncio.run(async_client.close())
+
+
+@pytest.mark.parametrize(
+    ("requested_limit", "batch_size", "expected_handler_calls"),
+    [(100, 9, 8), (2, 3, 2)],
+)
+def test_real_framework_tool_limit_fails_without_another_provider_call(
+    requested_limit, batch_size, expected_handler_calls
+):
+    skill_id = "00000000-0000-0000-0000-000000000001"
+    requests = []
+    tool_calls = [
+        {
+            "id": f"call-{index}",
+            "type": "function",
+            "function": {
+                "name": "bounded_tool",
+                "arguments": json.dumps({"value": index}),
+            },
+        }
+        for index in range(batch_size)
+    ]
+    runtime, async_client = make_real_runtime(
+        [
+            completion(
+                {"role": "assistant", "content": None, "tool_calls": tool_calls},
+                "tool_calls",
+                "response-tools",
+            ),
+            completion(
+                {
+                    "role": "assistant",
+                    "content": json.dumps(output_for(skill_id)),
+                },
+                "stop",
+                "response-should-not-run",
+            ),
+        ],
+        requests,
+    )
+    handler_calls = 0
+    counter_lock = threading.Lock()
+
+    def bounded_tool(value: int):
+        nonlocal handler_calls
+        with counter_lock:
+            handler_calls += 1
+        return value
+
+    try:
+        with pytest.raises(RuntimeLimitError, match="tool call limit"):
+            runtime.run_structured(
+                make_request(
+                    tools=(bounded_tool,),
+                    limits=RuntimeLimits(
+                        max_model_calls=100,
+                        max_tool_calls=requested_limit,
+                        timeout_seconds=1,
+                    ),
+                )
+            )
+        assert handler_calls == expected_handler_calls
+        assert len(requests) == 1
+    finally:
+        asyncio.run(async_client.close())
+
+
+def test_real_framework_async_tool_records_true_duration_and_success():
+    skill_id = "00000000-0000-0000-0000-000000000001"
+    requests = []
+    observers = []
+    runtime, async_client = make_real_runtime(
+        [
+            completion(
+                tool_call_message("slow_async_tool", {}, "call-slow"),
+                "tool_calls",
+                "response-tool",
+            ),
+            completion(
+                {
+                    "role": "assistant",
+                    "content": json.dumps(output_for(skill_id)),
+                },
+                "stop",
+                "response-final",
+            ),
+        ],
+        requests,
+        observers,
+    )
+
+    async def slow_async_tool():
+        await asyncio.sleep(0.02)
+        return "done"
+
+    try:
+        result = runtime.run_structured(make_request(tools=(slow_async_tool,)))
+        assert result.output.summary == "matched"
+        event = observers[0].events[0]
+        assert event.status == "succeeded"
+        assert event.duration_ms >= 15
+    finally:
+        asyncio.run(async_client.close())
+
+
+def test_real_framework_async_tool_exception_records_failure_and_stops():
+    skill_id = "00000000-0000-0000-0000-000000000001"
+    requests = []
+    observers = []
+    runtime, async_client = make_real_runtime(
+        [
+            completion(
+                tool_call_message("failing_async_tool", {}, "call-async-fail"),
+                "tool_calls",
+                "response-tool",
+            ),
+            completion(
+                {
+                    "role": "assistant",
+                    "content": json.dumps(output_for(skill_id)),
+                },
+                "stop",
+                "response-should-not-run",
+            ),
+        ],
+        requests,
+        observers,
+    )
+
+    async def failing_async_tool():
+        await asyncio.sleep(0.02)
+        raise ValueError("async tool exploded")
+
+    try:
+        with pytest.raises(ValueError, match="async tool exploded"):
+            runtime.run_structured(make_request(tools=(failing_async_tool,)))
+        assert len(requests) == 1
+        event = observers[0].events[0]
+        assert event.status == "failed"
+        assert event.duration_ms >= 15
+    finally:
+        asyncio.run(async_client.close())
