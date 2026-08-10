@@ -91,6 +91,17 @@ Microsoft 模式复用现有 `.env.ai` 中的 provider 配置。每次
 （`list_available_skills`、`get_available_skill`），不提供业务执行 Tool。
 修改该值后需要重启后端。
 
+可使用下面的命令执行一次仅匹配的 Microsoft provider smoke。它在进程内
+临时启用 Microsoft runtime，使用 synthetic task 和内存 Skill，输出不含
+密钥、provider URL 或原始响应的 JSON harness trace；退出码 `0` 表示通过，
+非零表示 fail-closed。该 JSON 是 harness 证据，不是应用
+`agent_runtime_completed` 日志；命令结束时会恢复该进程的 runtime 值为
+`legacy`。
+
+```powershell
+conda run -n langgraph python -m scripts.agent_runtime_smoke
+```
+
 ## 启动服务
 
 在项目根目录分别启动中控和两个演示系统：
