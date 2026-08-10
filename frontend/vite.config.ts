@@ -14,6 +14,7 @@ export default defineConfig({
       '/recordings': 'http://127.0.0.1:8000',
       '/skills': 'http://127.0.0.1:8000',
       '/task-runs': 'http://127.0.0.1:8000',
+      '/system-connections': 'http://127.0.0.1:8000',
     },
   },
   test: {
