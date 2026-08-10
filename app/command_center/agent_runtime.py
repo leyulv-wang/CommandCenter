@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from time import perf_counter
 from typing import Any, Callable, Generic, Protocol, TypeVar
 from uuid import uuid4
@@ -63,6 +64,20 @@ class RuntimeTelemetry:
     duration_ms: float
 
 
+class RuntimeFailureCategory(str, Enum):
+    TIMEOUT = "timeout"
+    LIMIT_EXCEEDED = "limit_exceeded"
+    TOOL_ERROR = "tool_error"
+    MODEL_OR_PROTOCOL_ERROR = "model_or_protocol_error"
+    CANDIDATE_BOUNDARY_REJECTED = "candidate_boundary_rejected"
+
+
+@dataclass(frozen=True)
+class RuntimeFailureSummary:
+    failure_category: RuntimeFailureCategory
+    telemetry: RuntimeTelemetry
+
+
 @dataclass(frozen=True)
 class RuntimeResult(Generic[SchemaT]):
     output: SchemaT
@@ -83,6 +98,22 @@ class RuntimeLimitError(RuntimeError):
 
 class RuntimeConfigurationError(RuntimeError):
     pass
+
+
+_RUNTIME_FAILURE_ATTRIBUTE = "_command_center_runtime_failure"
+
+
+def attach_runtime_failure(
+    error: Exception, summary: RuntimeFailureSummary
+) -> Exception:
+    """Attach a sanitized diagnostic summary without changing exception semantics."""
+    setattr(error, _RUNTIME_FAILURE_ATTRIBUTE, summary)
+    return error
+
+
+def get_runtime_failure(error: BaseException) -> RuntimeFailureSummary | None:
+    summary = getattr(error, _RUNTIME_FAILURE_ATTRIBUTE, None)
+    return summary if isinstance(summary, RuntimeFailureSummary) else None
 
 
 class LegacyStructuredModelRuntime:

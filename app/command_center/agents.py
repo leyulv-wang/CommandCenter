@@ -7,8 +7,13 @@ from uuid import uuid4
 from app.command_center.agent_runtime import (
     AgentRuntime,
     LegacyStructuredModelRuntime,
+    RuntimeFailureCategory,
+    RuntimeFailureSummary,
+    RuntimeLimitError,
     RuntimeRequest,
     RuntimeResult,
+    attach_runtime_failure,
+    get_runtime_failure,
 )
 from app.command_center.model import StructuredModel
 from app.command_center.schemas import (
@@ -25,6 +30,16 @@ from app.command_center.schemas import (
 
 
 logger = logging.getLogger(__name__)
+
+_SKILL_NAME_CHARS = 160
+_SKILL_SUMMARY_CHARS = 320
+_SKILL_DETAIL_CHARS = 1200
+_SKILL_INPUT_NAME_CHARS = 160
+_SKILL_INPUT_DESCRIPTION_CHARS = 600
+_SKILL_EXAMPLE_CHARS = 400
+_SKILL_SUMMARY_INPUTS = 8
+_SKILL_DETAIL_INPUTS = 32
+_SKILL_CANDIDATE_LIMIT = 100
 
 
 BINDING_PROTOCOL_PROMPT = (
@@ -239,6 +254,10 @@ class AgentSuite:
         tasks: list[dict[str, Any]],
         skills: list[SkillDefinition],
     ) -> TaskMatchDecision:
+        if len(skills) > _SKILL_CANDIDATE_LIMIT:
+            raise RuntimeLimitError(
+                f"task matching supports at most {_SKILL_CANDIDATE_LIMIT} Skill candidates"
+            )
         skill_by_id = {str(skill.skill_id): skill for skill in skills}
 
         def list_available_skills() -> list[dict[str, Any]]:
@@ -247,11 +266,20 @@ class AgentSuite:
                 {
                     "skill_id": str(skill.skill_id),
                     "version": skill.version,
-                    "name": skill.name,
-                    "description": skill.description,
+                    "name": _truncate(skill.name, _SKILL_NAME_CHARS),
+                    "description": _truncate(
+                        skill.description, _SKILL_SUMMARY_CHARS
+                    ),
                     "status": skill.status,
-                    "inputs": [item.model_dump(mode="json") for item in skill.inputs],
-                    "trigger_examples": skill.trigger_examples[:5],
+                    "inputs": [
+                        _compact_skill_input(item)
+                        for item in skill.inputs[:_SKILL_SUMMARY_INPUTS]
+                    ],
+                    "input_count": len(skill.inputs),
+                    "trigger_examples": [
+                        _truncate(example, _SKILL_EXAMPLE_CHARS)
+                        for example in skill.trigger_examples[:3]
+                    ],
                 }
                 for skill in skills
             ]
@@ -261,7 +289,21 @@ class AgentSuite:
             skill = skill_by_id.get(skill_id)
             if skill is None:
                 raise ValueError("Skill is not available in this request")
-            return skill.model_dump(mode="json")
+            detail = skill.model_dump(mode="json")
+            detail["name"] = _truncate(skill.name, _SKILL_NAME_CHARS)
+            detail["description"] = _truncate(
+                skill.description, _SKILL_DETAIL_CHARS
+            )
+            detail["inputs"] = [
+                _compact_skill_input(item)
+                for item in skill.inputs[:_SKILL_DETAIL_INPUTS]
+            ]
+            detail["input_count"] = len(skill.inputs)
+            detail["trigger_examples"] = [
+                _truncate(example, _SKILL_EXAMPLE_CHARS)
+                for example in skill.trigger_examples[:5]
+            ]
+            return detail
 
         tools = ()
         payload: dict[str, Any] = {"user_request": user_request, "tasks": tasks}
@@ -270,25 +312,56 @@ class AgentSuite:
         else:
             payload["skills"] = skills
 
-        result = self.match_runtime.run_structured(
-            RuntimeRequest(
-                role="task_matcher",
-                instructions=(
-                    "你是任务匹配智能体。根据员工自然语言、候选业务对象和 Skill 的名称、"
-                    "描述、示例及输入定义，选择唯一最合适的可执行 Skill。返回候选对象编号，"
-                    "并把该 Skill 声明的所有必填输入提取到 literals；不要补造用户没有表达且"
-                    "无法从上下文确定的业务值。"
-                ),
-                payload=payload,
-                output_schema=TaskMatchDecision,
-                tools=tools,
-                session_id=str(uuid4()),
-                limits=self.match_runtime.default_limits,
+        try:
+            result = self.match_runtime.run_structured(
+                RuntimeRequest(
+                    role="task_matcher",
+                    instructions=(
+                        "你是任务匹配智能体。根据员工自然语言、候选业务对象和 Skill 的名称、"
+                        "描述、示例及输入定义，选择唯一最合适的可执行 Skill。返回候选对象编号，"
+                        "并把该 Skill 声明的所有必填输入提取到 literals；不要补造用户没有表达且"
+                        "无法从上下文确定的业务值。"
+                    ),
+                    payload=payload,
+                    output_schema=TaskMatchDecision,
+                    tools=tools,
+                    session_id=str(uuid4()),
+                    limits=self.match_runtime.default_limits,
+                )
             )
-        )
-        _validate_match_references(result.output, tasks, skills)
+        except Exception as exc:
+            failure = get_runtime_failure(exc)
+            if failure is not None:
+                _log_runtime_failure(failure)
+            raise
+        try:
+            _validate_match_references(result.output, tasks, skills)
+        except ValueError as exc:
+            summary = RuntimeFailureSummary(
+                failure_category=RuntimeFailureCategory.CANDIDATE_BOUNDARY_REJECTED,
+                telemetry=result.telemetry,
+            )
+            attach_runtime_failure(exc, summary)
+            _log_runtime_failure(summary)
+            raise
         _log_runtime_telemetry(result)
         return result.output
+
+
+def _truncate(value: str, limit: int) -> str:
+    return value if len(value) <= limit else value[:limit]
+
+
+def _compact_skill_input(item: Any) -> dict[str, Any]:
+    payload = item.model_dump(mode="json")
+    return {
+        "name": _truncate(str(payload.get("name", "")), _SKILL_INPUT_NAME_CHARS),
+        "type": payload.get("type"),
+        "description": _truncate(
+            str(payload.get("description") or ""), _SKILL_INPUT_DESCRIPTION_CHARS
+        ),
+        "required": bool(payload.get("required")),
+    }
 
 
 def _as_payload(value: Any) -> dict[str, Any]:
@@ -447,6 +520,33 @@ def _log_runtime_telemetry(result: RuntimeResult[TaskMatchDecision]) -> None:
         telemetry.usage.total_tokens,
         telemetry.duration_ms,
         result.output.selected_skill_id,
+    )
+
+
+def _log_runtime_failure(summary: RuntimeFailureSummary) -> None:
+    telemetry = summary.telemetry
+    tool_events = [
+        {
+            "name": event.name,
+            "status": event.status,
+            "duration_ms": event.duration_ms,
+        }
+        for event in telemetry.tool_events
+    ]
+    logger.info(
+        "agent_runtime_failed trace_id=%s session_id=%s runtime=%s provider=%s "
+        "model=%s role=%s model_calls=%s tool_events=%s duration_ms=%s "
+        "failure_category=%s",
+        telemetry.trace_id,
+        telemetry.session_id,
+        telemetry.runtime,
+        telemetry.provider,
+        telemetry.model,
+        telemetry.role,
+        telemetry.model_calls,
+        tool_events,
+        telemetry.duration_ms,
+        summary.failure_category.value,
     )
 
 

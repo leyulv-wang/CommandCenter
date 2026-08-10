@@ -10,10 +10,12 @@ from openai import AsyncOpenAI
 
 import app.command_center.microsoft_agent_runtime as microsoft_agent_runtime
 from app.command_center.agent_runtime import (
+    RuntimeFailureCategory,
     RuntimeConfigurationError,
     RuntimeLimitError,
     RuntimeLimits,
     RuntimeRequest,
+    get_runtime_failure,
 )
 from app.command_center.microsoft_agent_runtime import MicrosoftAgentFrameworkRuntime
 from app.command_center.schemas import TaskMatchDecision
@@ -305,6 +307,72 @@ def test_microsoft_runtime_rejects_active_event_loop():
             runtime.run_structured(make_request())
 
     asyncio.run(invoke())
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        RuntimeLimits(max_model_calls=0),
+        RuntimeLimits(max_tool_calls=0),
+        RuntimeLimits(timeout_seconds=0),
+        RuntimeLimits(timeout_seconds=float("nan")),
+        RuntimeLimits(timeout_seconds=float("inf")),
+    ],
+)
+def test_microsoft_runtime_rejects_invalid_runtime_limits(limits):
+    runtime = MicrosoftAgentFrameworkRuntime(
+        agent_factory=lambda request, tools, observer: FakeAgent(
+            output_for("00000000-0000-0000-0000-000000000001")
+        ),
+        provider="openai_compatible",
+        model="test-model",
+    )
+    with pytest.raises(RuntimeConfigurationError, match="runtime limits"):
+        runtime.run_structured(make_request(limits=limits))
+
+
+def test_request_timeout_is_clamped_to_runtime_configured_maximum():
+    class SlowAgent(FakeAgent):
+        async def run(self, prompt, *, session, options, middleware=()):
+            await asyncio.sleep(0.04)
+            return await super().run(
+                prompt, session=session, options=options, middleware=middleware
+            )
+
+    runtime = MicrosoftAgentFrameworkRuntime(
+        agent_factory=lambda request, tools, observer: SlowAgent(
+            output_for("00000000-0000-0000-0000-000000000001")
+        ),
+        provider="openai_compatible",
+        model="test-model",
+        default_limits=RuntimeLimits(timeout_seconds=0.01),
+    )
+    with pytest.raises(RuntimeLimitError, match="timed out") as captured:
+        runtime.run_structured(make_request(timeout=1.0))
+    failure = get_runtime_failure(captured.value)
+    assert failure is not None
+    assert failure.failure_category is RuntimeFailureCategory.TIMEOUT
+    assert failure.telemetry.trace_id
+    assert failure.telemetry.duration_ms >= 5
+
+
+def test_model_or_protocol_failure_attaches_sanitized_runtime_summary():
+    class FailingAgent(FakeAgent):
+        async def run(self, prompt, *, session, options, middleware=()):
+            raise RuntimeError("SECRET-PROVIDER-DETAIL")
+
+    runtime = MicrosoftAgentFrameworkRuntime(
+        agent_factory=lambda request, tools, observer: FailingAgent({}),
+        provider="openai_compatible",
+        model="test-model",
+    )
+    with pytest.raises(RuntimeError, match="SECRET-PROVIDER-DETAIL") as captured:
+        runtime.run_structured(make_request())
+    failure = get_runtime_failure(captured.value)
+    assert failure is not None
+    assert failure.failure_category is RuntimeFailureCategory.MODEL_OR_PROTOCOL_ERROR
+    assert failure.telemetry.runtime == "microsoft_agent_framework"
+    assert "SECRET-PROVIDER-DETAIL" not in repr(failure)
 
 
 def completion(message, finish_reason, response_id):
@@ -818,5 +886,67 @@ def test_real_framework_async_callable_object_failure_stops_provider_and_is_time
         assert event.name == "FailingAsyncCallable"
         assert event.status == "failed"
         assert event.duration_ms >= 15
+    finally:
+        asyncio.run(async_client.close())
+
+
+def test_real_framework_sync_callable_returning_awaitable_succeeds_and_is_timed():
+    class DynamicAwaitableTool:
+        def __call__(self):
+            async def finish():
+                await asyncio.sleep(0.02)
+                return "done"
+
+            return finish()
+
+    requests = []
+    observers = []
+    runtime, async_client = make_dynamic_callable_runtime(
+        requests,
+        observers,
+        output_for("00000000-0000-0000-0000-000000000001"),
+    )
+    try:
+        result = runtime.run_structured(make_request(tools=(DynamicAwaitableTool(),)))
+        assert result.output.summary == "matched"
+        assert len(requests) == 2
+        event = observers[0].events[0]
+        assert event.name == "DynamicAwaitableTool"
+        assert event.status == "succeeded"
+        assert event.duration_ms >= 15
+    finally:
+        asyncio.run(async_client.close())
+
+
+def test_real_framework_sync_callable_returning_awaitable_failure_is_classified():
+    class FailingDynamicAwaitableTool:
+        def __call__(self):
+            async def fail():
+                await asyncio.sleep(0.02)
+                raise ValueError("SECRET-DYNAMIC-TOOL-DETAIL")
+
+            return fail()
+
+    requests = []
+    observers = []
+    runtime, async_client = make_dynamic_callable_runtime(
+        requests,
+        observers,
+        output_for("00000000-0000-0000-0000-000000000001"),
+    )
+    try:
+        with pytest.raises(ValueError, match="SECRET-DYNAMIC-TOOL-DETAIL") as captured:
+            runtime.run_structured(
+                make_request(tools=(FailingDynamicAwaitableTool(),))
+            )
+        assert len(requests) == 1
+        event = observers[0].events[0]
+        assert event.name == "FailingDynamicAwaitableTool"
+        assert event.status == "failed"
+        assert event.duration_ms >= 15
+        failure = get_runtime_failure(captured.value)
+        assert failure is not None
+        assert failure.failure_category is RuntimeFailureCategory.TOOL_ERROR
+        assert "SECRET-DYNAMIC-TOOL-DETAIL" not in repr(failure)
     finally:
         asyncio.run(async_client.close())

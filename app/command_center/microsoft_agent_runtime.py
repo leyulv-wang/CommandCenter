@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import math
 from collections.abc import Awaitable, Callable, Mapping
 from functools import wraps
 from threading import Lock
@@ -24,6 +25,8 @@ from pydantic import BaseModel
 from app.command_center.agent_runtime import (
     RuntimeCapabilities,
     RuntimeConfigurationError,
+    RuntimeFailureCategory,
+    RuntimeFailureSummary,
     RuntimeLimitError,
     RuntimeLimits,
     RuntimeRequest,
@@ -33,6 +36,7 @@ from app.command_center.agent_runtime import (
     RuntimeToolEvent,
     RuntimeUsage,
     SchemaT,
+    attach_runtime_failure,
 )
 
 
@@ -93,12 +97,28 @@ class MicrosoftAgentFrameworkRuntime:
         self.default_limits = _bounded_limits(default_limits or RuntimeLimits())
 
     def run_structured(self, request: RuntimeRequest[SchemaT]) -> RuntimeResult[SchemaT]:
-        _reject_active_event_loop()
         started = perf_counter()
         trace_id = str(uuid4())
-        observer = _RunObserver(_bounded_limits(request.limits))
+        _reject_active_event_loop()
+        limits = _bounded_limits(
+            request.limits, timeout_ceiling=self.default_limits.timeout_seconds
+        )
+        observer = _RunObserver(limits)
         tools = tuple(observer.wrap_tool(tool) for tool in request.tools)
-        agent = self._agent_factory(request, tools, observer)
+        try:
+            agent = self._agent_factory(request, tools, observer)
+        except Exception as exc:
+            _attach_failure(
+                exc,
+                RuntimeFailureCategory.MODEL_OR_PROTOCOL_ERROR,
+                request,
+                observer,
+                trace_id,
+                started,
+                self._provider,
+                self._model,
+            )
+            raise
 
         async def execute() -> Any:
             session = agent.create_session()
@@ -109,16 +129,75 @@ class MicrosoftAgentFrameworkRuntime:
                     options={"response_format": request.output_schema},
                     middleware=[observer.function_middleware],
                 ),
-                timeout=request.limits.timeout_seconds,
+                timeout=limits.timeout_seconds,
             )
 
         try:
             response = asyncio.run(execute())
         except asyncio.TimeoutError as exc:
-            raise RuntimeLimitError("agent runtime timed out") from exc
+            error = RuntimeLimitError("agent runtime timed out")
+            _attach_failure(
+                error,
+                RuntimeFailureCategory.TIMEOUT,
+                request,
+                observer,
+                trace_id,
+                started,
+                self._provider,
+                self._model,
+            )
+            raise error from exc
+        except Exception as exc:
+            category = (
+                RuntimeFailureCategory.LIMIT_EXCEEDED
+                if isinstance(exc, RuntimeLimitError)
+                else RuntimeFailureCategory.MODEL_OR_PROTOCOL_ERROR
+            )
+            _attach_failure(
+                exc,
+                category,
+                request,
+                observer,
+                trace_id,
+                started,
+                self._provider,
+                self._model,
+            )
+            raise
 
-        observer.raise_tool_error()
-        output = request.output_schema.model_validate(response.value)
+        try:
+            observer.raise_tool_error()
+        except Exception as exc:
+            category = (
+                RuntimeFailureCategory.LIMIT_EXCEEDED
+                if isinstance(exc, RuntimeLimitError)
+                else RuntimeFailureCategory.TOOL_ERROR
+            )
+            _attach_failure(
+                exc,
+                category,
+                request,
+                observer,
+                trace_id,
+                started,
+                self._provider,
+                self._model,
+            )
+            raise
+        try:
+            output = request.output_schema.model_validate(response.value)
+        except Exception as exc:
+            _attach_failure(
+                exc,
+                RuntimeFailureCategory.MODEL_OR_PROTOCOL_ERROR,
+                request,
+                observer,
+                trace_id,
+                started,
+                self._provider,
+                self._model,
+            )
+            raise
         usage_details = getattr(response, "usage_details", None)
         telemetry = RuntimeTelemetry(
             trace_id=trace_id,
@@ -284,11 +363,59 @@ def _set_callable_name(function: RuntimeTool, name: str) -> None:
     function.__qualname__ = name
 
 
-def _bounded_limits(limits: RuntimeLimits) -> RuntimeLimits:
+def _bounded_limits(
+    limits: RuntimeLimits, *, timeout_ceiling: float | None = None
+) -> RuntimeLimits:
+    if (
+        not isinstance(limits.max_model_calls, int)
+        or isinstance(limits.max_model_calls, bool)
+        or limits.max_model_calls <= 0
+        or not isinstance(limits.max_tool_calls, int)
+        or isinstance(limits.max_tool_calls, bool)
+        or limits.max_tool_calls <= 0
+        or not math.isfinite(limits.timeout_seconds)
+        or limits.timeout_seconds <= 0
+    ):
+        raise RuntimeConfigurationError(
+            "runtime limits require positive call counts and a finite positive timeout"
+        )
+    timeout_seconds = limits.timeout_seconds
+    if timeout_ceiling is not None:
+        if not math.isfinite(timeout_ceiling) or timeout_ceiling <= 0:
+            raise RuntimeConfigurationError("runtime limits require a finite timeout")
+        timeout_seconds = min(timeout_seconds, timeout_ceiling)
     return RuntimeLimits(
         max_model_calls=min(limits.max_model_calls, _HARD_MAX_MODEL_CALLS),
         max_tool_calls=min(limits.max_tool_calls, _HARD_MAX_TOOL_CALLS),
-        timeout_seconds=limits.timeout_seconds,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _attach_failure(
+    error: Exception,
+    category: RuntimeFailureCategory,
+    request: RuntimeRequest[Any],
+    observer: _RunObserver,
+    trace_id: str,
+    started: float,
+    provider: str,
+    model: str,
+) -> None:
+    telemetry = RuntimeTelemetry(
+        trace_id=trace_id,
+        session_id=request.session_id,
+        runtime="microsoft_agent_framework",
+        provider=provider,
+        model=model,
+        role=request.role,
+        model_calls=observer.model_calls,
+        tool_events=tuple(observer.events),
+        usage=RuntimeUsage(),
+        duration_ms=_elapsed_ms(started),
+    )
+    attach_runtime_failure(
+        error,
+        RuntimeFailureSummary(failure_category=category, telemetry=telemetry),
     )
 
 

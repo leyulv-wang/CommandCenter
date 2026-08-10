@@ -107,3 +107,30 @@ def test_legacy_does_not_require_provider_values(monkeypatch, tmp_path):
         build_agent_runtime(model=object(), config_path=missing),
         LegacyStructuredModelRuntime,
     )
+
+
+@pytest.mark.parametrize("timeout_value", ["0", "-1", "nan", "inf", "-inf"])
+def test_microsoft_runtime_rejects_non_positive_or_non_finite_timeout(
+    monkeypatch, tmp_path, timeout_value
+):
+    env_file = tmp_path / ".env.ai"
+    env_file.write_text(
+        "AI_CONFIG_MODEL_BASE_URL=http://provider/v1\n"
+        "AI_CONFIG_MODEL_NAME=test-model\n"
+        "AI_CONFIG_API_KEY=test-key\n"
+        f"AI_CONFIG_TIMEOUT_SECONDS={timeout_value}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("COMMAND_CENTER_AGENT_RUNTIME", "microsoft")
+    for name in (
+        "AI_CONFIG_MODEL_BASE_URL",
+        "AI_CONFIG_MODEL_NAME",
+        "AI_CONFIG_API_KEY",
+        "AI_CONFIG_TIMEOUT_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(
+        RuntimeConfigurationError, match="finite number greater than zero"
+    ):
+        build_agent_runtime(model=object(), config_path=env_file)

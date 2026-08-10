@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import math
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,10 @@ def build_agent_runtime(
         raise RuntimeConfigurationError(
             "AI_CONFIG_TIMEOUT_SECONDS must be a number"
         ) from exc
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise RuntimeConfigurationError(
+            "AI_CONFIG_TIMEOUT_SECONDS must be a finite number greater than zero"
+        )
 
     try:
         microsoft_runtime = _load_microsoft_runtime_class()

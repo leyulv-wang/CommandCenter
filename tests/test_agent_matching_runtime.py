@@ -3,11 +3,16 @@ from uuid import uuid4
 import pytest
 
 from app.command_center.agent_runtime import (
+    RuntimeFailureCategory,
+    RuntimeFailureSummary,
     RuntimeCapabilities,
+    RuntimeLimitError,
     RuntimeLimits,
     RuntimeResult,
     RuntimeTelemetry,
     RuntimeUsage,
+    attach_runtime_failure,
+    get_runtime_failure,
 )
 from app.command_center.agents import AgentSuite
 from app.command_center.schemas import SkillDefinition, TaskMatchDecision
@@ -120,8 +125,12 @@ def test_match_rejects_skill_outside_supplied_candidates():
     skill = SkillDefinition.model_validate(valid_skill_payload())
     runtime = OutputRuntime(decision_payload(uuid4()))
     agents = AgentSuite(model=object(), match_runtime=runtime)
-    with pytest.raises(ValueError, match="unknown Skill"):
+    with pytest.raises(ValueError, match="unknown Skill") as captured:
         agents.match_request("处理任务", [{"task_id": "TASK-1"}], [skill])
+    failure = get_runtime_failure(captured.value)
+    assert failure is not None
+    assert failure.failure_category is RuntimeFailureCategory.CANDIDATE_BOUNDARY_REJECTED
+    assert failure.telemetry.trace_id == "trace-output"
 
 
 def test_get_available_skill_rejects_unknown_id():
@@ -176,6 +185,117 @@ def test_runtime_log_contains_counts_but_not_skill_payload_or_secret(caplog):
     assert "trace-output" in caplog.text
     assert "SECRET-SKILL-CONTENT" not in caplog.text
     assert "SECRET-USER-CONTENT" not in caplog.text
+
+
+def test_candidate_boundary_failure_logs_safe_classification_without_payload(caplog):
+    skill = SkillDefinition.model_validate(valid_skill_payload()).model_copy(
+        update={"description": "SECRET-SKILL-CONTENT"}
+    )
+    runtime = OutputRuntime(decision_payload(uuid4()))
+    with caplog.at_level("INFO", logger="app.command_center.agents"):
+        with pytest.raises(ValueError, match="unknown Skill"):
+            AgentSuite(object(), match_runtime=runtime).match_request(
+                "SECRET-USER-CONTENT", [{"task_id": "TASK-1"}], [skill]
+            )
+    assert "failure_category=candidate_boundary_rejected" in caplog.text
+    assert "trace-output" in caplog.text
+    assert "SECRET-SKILL-CONTENT" not in caplog.text
+    assert "SECRET-USER-CONTENT" not in caplog.text
+
+
+def test_runtime_failure_summary_is_logged_before_original_exception_propagates(caplog):
+    class FailingRuntime(OutputRuntime):
+        def run_structured(self, request):
+            error = RuntimeError("SECRET-PROVIDER-DETAIL")
+            attach_runtime_failure(
+                error,
+                RuntimeFailureSummary(
+                    failure_category=RuntimeFailureCategory.MODEL_OR_PROTOCOL_ERROR,
+                    telemetry=RuntimeTelemetry(
+                        trace_id="trace-failure",
+                        session_id=request.session_id,
+                        runtime="test-runtime",
+                        provider="test-provider",
+                        model="test-model",
+                        role=request.role,
+                        model_calls=2,
+                        tool_events=(),
+                        usage=RuntimeUsage(),
+                        duration_ms=3.0,
+                    ),
+                ),
+            )
+            raise error
+
+    skill = SkillDefinition.model_validate(valid_skill_payload())
+    with caplog.at_level("INFO", logger="app.command_center.agents"):
+        with pytest.raises(RuntimeError, match="SECRET-PROVIDER-DETAIL"):
+            AgentSuite(object(), match_runtime=FailingRuntime({})).match_request(
+                "match", [{"task_id": "TASK-1"}], [skill]
+            )
+    assert "failure_category=model_or_protocol_error" in caplog.text
+    assert "trace-failure" in caplog.text
+    assert "SECRET-PROVIDER-DETAIL" not in caplog.text
+
+
+def test_matching_rejects_candidate_sets_above_context_budget():
+    skills = []
+    for _ in range(101):
+        payload = {**valid_skill_payload(), "skill_id": str(uuid4())}
+        skills.append(SkillDefinition.model_validate(payload))
+    with pytest.raises(RuntimeLimitError, match="at most 100 Skill candidates"):
+        AgentSuite(object(), match_runtime=OutputRuntime({})).match_request(
+            "match", [{"task_id": "TASK-1"}], skills
+        )
+
+
+def test_skill_tools_apply_deterministic_text_budgets_without_losing_boundaries():
+    base = valid_skill_payload()
+    skills = []
+    for index in range(40):
+        payload = {
+            **base,
+            "skill_id": str(uuid4()),
+            "version": index + 1,
+            "name": f"Skill {index} " + "N" * 1000,
+            "description": f"key-{index}-" + "D" * 5000,
+            "trigger_examples": ["E" * 2000 for _ in range(20)],
+            "inputs": [
+                {
+                    "name": f"required_{input_index}_" + "I" * 500,
+                    "type": "string",
+                    "description": "X" * 3000,
+                    "required": True,
+                }
+                for input_index in range(12)
+            ],
+        }
+        skills.append(SkillDefinition.model_validate(payload))
+
+    class BudgetProbeRuntime(OutputRuntime):
+        def run_structured(self, request):
+            summaries = request.tools[0]()
+            detail = request.tools[1](str(skills[-1].skill_id))
+            assert len(summaries) == 40
+            assert {item["skill_id"] for item in summaries} == {
+                str(skill.skill_id) for skill in skills
+            }
+            assert all(len(item["name"]) <= 160 for item in summaries)
+            assert all(len(item["description"]) <= 320 for item in summaries)
+            assert all(len(item["trigger_examples"]) <= 3 for item in summaries)
+            assert detail["skill_id"] == str(skills[-1].skill_id)
+            assert detail["version"] == skills[-1].version
+            assert len(detail["description"]) <= 1200
+            assert [item["name"] for item in detail["inputs"]] == [
+                item.name[:160] for item in skills[-1].inputs
+            ]
+            assert all(item["required"] for item in detail["inputs"])
+            self.output = decision_payload(skills[-1].skill_id)
+            return super().run_structured(request)
+
+    AgentSuite(object(), match_runtime=BudgetProbeRuntime({})).match_request(
+        "match", [{"task_id": "TASK-1"}], skills
+    )
 
 
 def test_default_constructor_keeps_legacy_full_skill_payload():
