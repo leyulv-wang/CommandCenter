@@ -133,6 +133,7 @@ export type ExtensionRecordingStatus =
   | 'verified_candidate'
   | 'browser_candidate'
   | 'rejected'
+  | 'needs_reteach'
   | 'recorded'
 
 export interface RecordingSummary {

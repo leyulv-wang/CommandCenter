@@ -26,12 +26,17 @@ const presentations: Record<ExtensionRecordingStatus, RecordingStatusPresentatio
   verified_candidate: { label: 'Skill 已完成验证', detail: '候选能力已通过无害测试', tone: 'success' },
   browser_candidate: { label: '浏览器 Skill 待验证', detail: '需要隔离环境验证浏览器执行', tone: 'waiting' },
   rejected: { label: 'Skill 学习失败', detail: '请查看失败原因后重新演示', tone: 'danger' },
+  needs_reteach: { label: '需要重新演示', detail: '本次证据不足，请查看原因后重新录制', tone: 'danger' },
 }
 
 export function recordingStatusPresentation(
-  status: ExtensionRecordingStatus,
+  status: ExtensionRecordingStatus | string,
 ): RecordingStatusPresentation {
-  return presentations[status]
+  return presentations[status as ExtensionRecordingStatus] ?? {
+    label: `未知状态：${status}`,
+    detail: '中控返回了当前前端尚未识别的录制状态',
+    tone: 'neutral',
+  }
 }
 
 export function isRecordingTerminal(status: ExtensionRecordingStatus): boolean {

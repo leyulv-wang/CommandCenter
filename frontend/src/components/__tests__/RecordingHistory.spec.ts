@@ -44,4 +44,20 @@ describe('RecordingHistory', () => {
     })
     expect(wrapper.text()).toContain('还没有浏览器录制')
   })
+
+  it('keeps the history visible when the backend returns a retry status', () => {
+    const retryRecording = {
+      ...recordings[0],
+      recording_id: 'retry',
+      status: 'needs_reteach',
+    } satisfies RecordingSummary
+
+    const wrapper = shallowMount(RecordingHistory, {
+      props: { recordings: [retryRecording], selectedId: 'retry' },
+    })
+
+    expect(wrapper.text()).toContain('1 条')
+    expect(wrapper.text()).toContain('需要重新演示')
+    expect(wrapper.get('[data-recording-id="retry"]').text()).toContain('需要重新演示')
+  })
 })
