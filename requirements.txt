@@ -10,3 +10,5 @@ playwright
 python-multipart
 pytest
 keyring==25.7.0
+agent-framework-core==1.13.0
+agent-framework-openai==1.12.0
