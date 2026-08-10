@@ -556,7 +556,12 @@ class VerificationResult(BaseModel):
 
 
 class TaskMatchDecision(BaseModel):
-    candidate_task_ids: list[str]
+    candidate_task_ids: list[str] = Field(
+        description=(
+            "Exact task_id values copied from the supplied tasks; "
+            "must not contain Skill IDs or invented identifiers."
+        )
+    )
     selected_skill_id: UUID
     literals: dict[str, Any] = Field(default_factory=dict)
     summary: str

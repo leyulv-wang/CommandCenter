@@ -74,6 +74,13 @@ def test_tool_loop_runtime_discovers_call_scoped_skills_without_prompt_injection
         "get_available_skill",
     ]
     assert runtime.requests[0].requires_tool_evidence is True
+    assert "candidate_task_ids 只能逐字复制 tasks 中的 task_id" in (
+        runtime.requests[0].instructions
+    )
+    candidate_schema = runtime.requests[0].output_schema.model_json_schema()[
+        "properties"
+    ]["candidate_task_ids"]
+    assert "must not contain Skill IDs" in candidate_schema["description"]
 
 
 class OutputRuntime:
@@ -152,6 +159,52 @@ def test_match_rejects_unknown_candidate_task_id():
         AgentSuite(object(), match_runtime=runtime).match_request(
             "处理任务", [{"task_id": "TASK-1"}], [skill]
         )
+
+
+def test_match_agent_repairs_one_protocol_invalid_candidate_task_id():
+    skill = SkillDefinition.model_validate(valid_skill_payload())
+
+    class RepairingRuntime(OutputRuntime):
+        def run_structured(self, request):
+            self.requests.append(request)
+            task_id = (
+                str(skill.skill_id)
+                if len(self.requests) == 1
+                else request.payload["validation_feedback"]["allowed_task_ids"][0]
+            )
+            return RuntimeResult(
+                output=TaskMatchDecision.model_validate(
+                    decision_payload(skill.skill_id, task_id)
+                ),
+                telemetry=RuntimeTelemetry(
+                    trace_id=f"trace-{len(self.requests)}",
+                    session_id=request.session_id,
+                    runtime="fake",
+                    provider="fake",
+                    model="fake-model",
+                    role=request.role,
+                    model_calls=1,
+                    tool_events=(),
+                    usage=RuntimeUsage(),
+                    duration_ms=1.0,
+                ),
+            )
+
+    runtime = RepairingRuntime({})
+    decision = AgentSuite(object(), match_runtime=runtime).match_request(
+        "处理任务", [{"task_id": "TASK-1"}], [skill]
+    )
+
+    assert decision.candidate_task_ids == ["TASK-1"]
+    assert len(runtime.requests) == 2
+    assert runtime.requests[1].payload["validation_feedback"] == {
+        "error": "agent match references unknown task",
+        "allowed_task_ids": ["TASK-1"],
+        "allowed_skill_ids": [str(skill.skill_id)],
+    }
+    assert runtime.requests[1].payload["previous_invalid_output"][
+        "candidate_task_ids"
+    ] == [str(skill.skill_id)]
 
 
 def test_two_match_calls_receive_different_sessions_and_scoped_tools():

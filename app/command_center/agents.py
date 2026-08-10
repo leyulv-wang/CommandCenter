@@ -312,41 +312,75 @@ class AgentSuite:
         else:
             payload["skills"] = skills
 
-        try:
-            result = self.match_runtime.run_structured(
-                RuntimeRequest(
-                    role="task_matcher",
-                    instructions=(
-                        "你是任务匹配智能体。根据员工自然语言、候选业务对象和 Skill 的名称、"
-                        "描述、示例及输入定义，选择唯一最合适的可执行 Skill。返回候选对象编号，"
-                        "并把该 Skill 声明的所有必填输入提取到 literals；不要补造用户没有表达且"
-                        "无法从上下文确定的业务值。"
-                    ),
-                    payload=payload,
-                    output_schema=TaskMatchDecision,
-                    tools=tools,
-                    requires_tool_evidence=bool(tools),
-                    session_id=str(uuid4()),
-                    limits=self.match_runtime.default_limits,
+        instructions = (
+            "你是任务匹配智能体。根据员工自然语言、候选业务对象和 Skill 的名称、"
+            "描述、示例及输入定义，选择唯一最合适的可执行 Skill。返回候选对象编号，"
+            "并把该 Skill 声明的所有必填输入提取到 literals；不要补造用户没有表达且"
+            "无法从上下文确定的业务值。candidate_task_ids 只能逐字复制 tasks 中的 "
+            "task_id，绝不能填写 Skill ID 或自行生成编号；只有一个任务对象时直接返回"
+            "该对象的 task_id。"
+        )
+        runtime_request = RuntimeRequest(
+            role="task_matcher",
+            instructions=instructions,
+            payload=payload,
+            output_schema=TaskMatchDecision,
+            tools=tools,
+            requires_tool_evidence=bool(tools),
+            session_id=str(uuid4()),
+            limits=self.match_runtime.default_limits,
+        )
+        for attempt in range(2):
+            try:
+                result = self.match_runtime.run_structured(runtime_request)
+            except Exception as exc:
+                failure = get_runtime_failure(exc)
+                if failure is not None:
+                    _log_runtime_failure(failure)
+                raise
+            try:
+                _validate_match_references(result.output, tasks, skills)
+            except ValueError as exc:
+                if attempt == 0:
+                    runtime_request = RuntimeRequest(
+                        role=runtime_request.role,
+                        instructions=(
+                            instructions
+                            + "\n上一轮输出违反了候选集合协议。根据 validation_feedback "
+                            "重新检查证据并修正输出，不要重复无效标识符。"
+                        ),
+                        payload={
+                            **payload,
+                            "previous_invalid_output": result.output.model_dump(
+                                mode="json"
+                            ),
+                            "validation_feedback": {
+                                "error": str(exc),
+                                "allowed_task_ids": sorted(
+                                    str(task["task_id"])
+                                    for task in tasks
+                                    if task.get("task_id")
+                                ),
+                                "allowed_skill_ids": sorted(skill_by_id),
+                            },
+                        },
+                        output_schema=runtime_request.output_schema,
+                        tools=tools,
+                        requires_tool_evidence=bool(tools),
+                        session_id=str(uuid4()),
+                        limits=runtime_request.limits,
+                    )
+                    continue
+                summary = RuntimeFailureSummary(
+                    failure_category=RuntimeFailureCategory.CANDIDATE_BOUNDARY_REJECTED,
+                    telemetry=result.telemetry,
                 )
-            )
-        except Exception as exc:
-            failure = get_runtime_failure(exc)
-            if failure is not None:
-                _log_runtime_failure(failure)
-            raise
-        try:
-            _validate_match_references(result.output, tasks, skills)
-        except ValueError as exc:
-            summary = RuntimeFailureSummary(
-                failure_category=RuntimeFailureCategory.CANDIDATE_BOUNDARY_REJECTED,
-                telemetry=result.telemetry,
-            )
-            attach_runtime_failure(exc, summary)
-            _log_runtime_failure(summary)
-            raise
-        _log_runtime_telemetry(result)
-        return result.output
+                attach_runtime_failure(exc, summary)
+                _log_runtime_failure(summary)
+                raise
+            _log_runtime_telemetry(result)
+            return result.output
+        raise AssertionError("task match repair loop ended unexpectedly")
 
 
 def _truncate(value: str, limit: int) -> str:
