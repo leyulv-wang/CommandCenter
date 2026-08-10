@@ -8,6 +8,7 @@ import pytest
 from agent_framework.openai import OpenAIChatCompletionClient
 from openai import AsyncOpenAI
 
+import app.command_center.microsoft_agent_runtime as microsoft_agent_runtime
 from app.command_center.agent_runtime import (
     RuntimeConfigurationError,
     RuntimeLimitError,
@@ -60,6 +61,62 @@ def output_for(skill_id):
         "literals": {},
         "summary": "matched",
     }
+
+
+def test_from_openai_compatible_builds_fixed_version_agent_factory(monkeypatch):
+    calls = {}
+    output = output_for("00000000-0000-0000-0000-000000000001")
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            calls["async_client_instance"] = self
+            calls["async_client"] = kwargs
+
+    class FakeOpenAIChatCompletionClient:
+        def __init__(self, **kwargs):
+            calls["chat_client"] = kwargs
+
+        def as_agent(self, **kwargs):
+            calls["agent_factory"] = kwargs
+            return FakeAgent(output)
+
+    monkeypatch.setattr(microsoft_agent_runtime, "AsyncOpenAI", FakeAsyncOpenAI)
+    monkeypatch.setattr(
+        microsoft_agent_runtime,
+        "OpenAIChatCompletionClient",
+        FakeOpenAIChatCompletionClient,
+    )
+
+    runtime = MicrosoftAgentFrameworkRuntime.from_openai_compatible(
+        base_url="https://provider.example/v1",
+        api_key="test-secret-key",
+        model="provider-model",
+        timeout_seconds=12.5,
+    )
+    result = runtime.run_structured(make_request())
+
+    assert calls["async_client"] == {
+        "base_url": "https://provider.example/v1",
+        "api_key": "test-secret-key",
+        "timeout": 12.5,
+    }
+    assert calls["chat_client"] == {
+        "async_client": calls["async_client_instance"],
+        "model": "provider-model",
+    }
+    assert calls["agent_factory"] == {
+        "name": "task_matcher",
+        "instructions": "match",
+        "tools": [],
+        "default_options": {"temperature": 0},
+        "middleware": calls["agent_factory"]["middleware"],
+    }
+    assert len(calls["agent_factory"]["middleware"]) == 1
+    assert callable(calls["agent_factory"]["middleware"][0])
+    assert runtime.default_limits == RuntimeLimits(timeout_seconds=12.5)
+    assert result.telemetry.provider == "openai_compatible"
+    assert result.telemetry.model == "provider-model"
+    assert "test-secret-key" not in repr(runtime)
 
 
 def test_microsoft_runtime_uses_fresh_session_and_pydantic_response_format():

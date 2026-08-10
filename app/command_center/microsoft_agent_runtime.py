@@ -17,6 +17,8 @@ from agent_framework import (
     chat_middleware as framework_chat_middleware,
     function_middleware as framework_function_middleware,
 )
+from agent_framework.openai import OpenAIChatCompletionClient
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from app.command_center.agent_runtime import (
@@ -41,6 +43,42 @@ _HARD_MAX_TOOL_CALLS = 8
 
 class MicrosoftAgentFrameworkRuntime:
     capabilities = RuntimeCapabilities(tool_loop=True)
+
+    @classmethod
+    def from_openai_compatible(
+        cls,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout_seconds: float,
+    ) -> "MicrosoftAgentFrameworkRuntime":
+        async_client = AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout_seconds,
+        )
+        client = OpenAIChatCompletionClient(async_client=async_client, model=model)
+
+        def agent_factory(
+            request: RuntimeRequest[Any],
+            tools: tuple[RuntimeTool, ...],
+            observer: _RunObserver,
+        ) -> Any:
+            return client.as_agent(
+                name=request.role,
+                instructions=request.instructions,
+                tools=list(tools),
+                default_options={"temperature": 0},
+                middleware=[observer.chat_middleware],
+            )
+
+        return cls(
+            agent_factory=agent_factory,
+            provider="openai_compatible",
+            model=model,
+            default_limits=RuntimeLimits(timeout_seconds=timeout_seconds),
+        )
 
     def __init__(
         self,
