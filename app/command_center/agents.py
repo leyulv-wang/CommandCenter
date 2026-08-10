@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
+from uuid import uuid4
 
+from app.command_center.agent_runtime import (
+    AgentRuntime,
+    LegacyStructuredModelRuntime,
+    RuntimeRequest,
+    RuntimeResult,
+)
 from app.command_center.model import StructuredModel
 from app.command_center.schemas import (
     APIAttributionAnalysis,
@@ -14,6 +22,9 @@ from app.command_center.schemas import (
     TraceSegmentation,
     VerificationResult,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 BINDING_PROTOCOL_PROMPT = (
@@ -31,8 +42,13 @@ DEMONSTRATION_LITERAL_PROMPT = (
 
 
 class AgentSuite:
-    def __init__(self, model: StructuredModel):
+    def __init__(
+        self,
+        model: StructuredModel,
+        match_runtime: AgentRuntime | None = None,
+    ):
         self.model = model
+        self.match_runtime = match_runtime or LegacyStructuredModelRuntime(model)
 
     def analyze_demonstration(
         self,
@@ -223,20 +239,56 @@ class AgentSuite:
         tasks: list[dict[str, Any]],
         skills: list[SkillDefinition],
     ) -> TaskMatchDecision:
-        return self.model.generate(
-            TaskMatchDecision,
-            (
-                "你是任务匹配智能体。根据员工自然语言、候选业务对象和 Skill 的名称、"
-                "描述、示例及输入定义，选择唯一最合适的可执行 Skill。返回候选对象编号，"
-                "并把该 Skill 声明的所有必填输入提取到 literals；不要补造用户没有表达且"
-                "无法从上下文确定的业务值。"
-            ),
-            {
-                "user_request": user_request,
-                "tasks": tasks,
-                "skills": skills,
-            },
+        skill_by_id = {str(skill.skill_id): skill for skill in skills}
+
+        def list_available_skills() -> list[dict[str, Any]]:
+            """List compact summaries of Skills available for this request."""
+            return [
+                {
+                    "skill_id": str(skill.skill_id),
+                    "version": skill.version,
+                    "name": skill.name,
+                    "description": skill.description,
+                    "status": skill.status,
+                    "inputs": [item.model_dump(mode="json") for item in skill.inputs],
+                    "trigger_examples": skill.trigger_examples[:5],
+                }
+                for skill in skills
+            ]
+
+        def get_available_skill(skill_id: str) -> dict[str, Any]:
+            """Get one available Skill definition by exact Skill ID."""
+            skill = skill_by_id.get(skill_id)
+            if skill is None:
+                raise ValueError("Skill is not available in this request")
+            return skill.model_dump(mode="json")
+
+        tools = ()
+        payload: dict[str, Any] = {"user_request": user_request, "tasks": tasks}
+        if self.match_runtime.capabilities.tool_loop:
+            tools = (list_available_skills, get_available_skill)
+        else:
+            payload["skills"] = skills
+
+        result = self.match_runtime.run_structured(
+            RuntimeRequest(
+                role="task_matcher",
+                instructions=(
+                    "你是任务匹配智能体。根据员工自然语言、候选业务对象和 Skill 的名称、"
+                    "描述、示例及输入定义，选择唯一最合适的可执行 Skill。返回候选对象编号，"
+                    "并把该 Skill 声明的所有必填输入提取到 literals；不要补造用户没有表达且"
+                    "无法从上下文确定的业务值。"
+                ),
+                payload=payload,
+                output_schema=TaskMatchDecision,
+                tools=tools,
+                session_id=str(uuid4()),
+                limits=self.match_runtime.default_limits,
+            )
         )
+        _validate_match_references(result.output, tasks, skills)
+        _log_runtime_telemetry(result)
+        return result.output
 
 
 def _as_payload(value: Any) -> dict[str, Any]:
@@ -352,6 +404,49 @@ def _validate_skill_tool_references(skill: SkillDefinition, catalog: Any) -> Non
         [step.tool_id for step in skill.steps],
         _catalog_tool_ids(catalog),
         "Tool",
+    )
+
+
+def _validate_match_references(
+    decision: TaskMatchDecision,
+    tasks: list[dict[str, Any]],
+    skills: list[SkillDefinition],
+) -> None:
+    known_skill_ids = {skill.skill_id for skill in skills}
+    known_task_ids = {str(task["task_id"]) for task in tasks if task.get("task_id")}
+    if decision.selected_skill_id not in known_skill_ids:
+        raise ValueError("agent match references unknown Skill")
+    if set(decision.candidate_task_ids) - known_task_ids:
+        raise ValueError("agent match references unknown task")
+
+
+def _log_runtime_telemetry(result: RuntimeResult[TaskMatchDecision]) -> None:
+    telemetry = result.telemetry
+    tool_events = [
+        {
+            "name": event.name,
+            "status": event.status,
+            "duration_ms": event.duration_ms,
+        }
+        for event in telemetry.tool_events
+    ]
+    logger.info(
+        "agent_runtime_completed trace_id=%s session_id=%s runtime=%s provider=%s "
+        "model=%s role=%s model_calls=%s tool_events=%s input_tokens=%s "
+        "output_tokens=%s total_tokens=%s duration_ms=%s selected_skill_id=%s",
+        telemetry.trace_id,
+        telemetry.session_id,
+        telemetry.runtime,
+        telemetry.provider,
+        telemetry.model,
+        telemetry.role,
+        telemetry.model_calls,
+        tool_events,
+        telemetry.usage.input_tokens,
+        telemetry.usage.output_tokens,
+        telemetry.usage.total_tokens,
+        telemetry.duration_ms,
+        result.output.selected_skill_id,
     )
 
 
