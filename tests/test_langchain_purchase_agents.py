@@ -9,7 +9,6 @@ from langgraph.errors import GraphRecursionError
 
 from app.command_center.langchain_purchase_agents import (
     LangChainPurchaseAgents,
-    PurchaseTrackingLimitError,
     PurchaseTrackingProtocolError,
 )
 from app.command_center.model import build_chat_model_from_environment
@@ -310,20 +309,27 @@ def test_agent_adapter_rejects_write_tool_before_model_invocation():
         )
 
 
-def test_agent_adapter_stops_after_tool_limit():
+def test_agent_adapter_summarizes_evidence_after_tool_limit():
+    executor = PurchaseExecutor()
     agents = LangChainPurchaseAgents(
         model=object(),
         tools=[
             purchase_tool("yifeng_mes:purchase_orders", "sourceCode"),
             purchase_tool("yifeng_mes:receiving_records", "orderNumber"),
         ],
-        executor=PurchaseExecutor(),
+        executor=executor,
         agent_factory=scripted_factory([], repeat_first_tool=True),
         max_tool_calls=1,
     )
 
-    with pytest.raises(PurchaseTrackingLimitError, match="Tool call limit"):
-        agents.trace(tracking_scope())
+    run = agents.trace(tracking_scope())
+
+    assert len(executor.commands) == 1
+    assert [result.step_id for result in run.step_results] == ["tool_01"]
+    assert run.events[-1] == {
+        "type": "agent_loop_stopped",
+        "reason": "tool_call_limit",
+    }
 
 
 def test_agent_adapter_reuses_duplicate_read_call_without_spending_budget():

@@ -177,14 +177,20 @@ class LangChainPurchaseAgents:
             "scope": scope.model_dump(mode="json"),
             "available_tools": [_compact_tool(tool) for tool in self.tools],
         }
+        loop_stop_reason: str | None = None
         try:
             loop_result = self._invoke_agent(agent, payload)
-        except GraphRecursionError:
+        except (GraphRecursionError, PurchaseTrackingLimitError) as exc:
             if not ledger.step_results:
                 raise
             # The loop is intentionally bounded. Evidence already collected is
             # handed to the independent structured summarizer and verifier,
             # which decide whether it is complete, pending, or insufficient.
+            loop_stop_reason = (
+                "tool_call_limit"
+                if isinstance(exc, PurchaseTrackingLimitError)
+                else "recursion_limit"
+            )
             loop_result = {"messages": []}
         if not ledger.step_results:
             loop_result = self._invoke_agent(
@@ -216,6 +222,7 @@ class LangChainPurchaseAgents:
             {
                 "scope": scope.model_dump(mode="json"),
                 "tool_loop_summary": _last_message_content(loop_result),
+                "loop_stop_reason": loop_stop_reason,
                 "step_results": [
                     result.model_dump(mode="json") for result in ledger.step_results
                 ],
@@ -224,7 +231,14 @@ class LangChainPurchaseAgents:
         return PurchaseAgentRun(
             output=output,
             step_results=list(ledger.step_results),
-            events=[_safe_tool_event(result) for result in ledger.step_results],
+            events=[
+                *[_safe_tool_event(result) for result in ledger.step_results],
+                *(
+                    [{"type": "agent_loop_stopped", "reason": loop_stop_reason}]
+                    if loop_stop_reason
+                    else []
+                ),
+            ],
         )
 
     def verify(
