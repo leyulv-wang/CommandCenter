@@ -4,7 +4,7 @@ from typing import Any, Callable, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, status
-from pydantic import BaseModel, Field, SecretStr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
 from app.command_center.schemas import EvidenceIdentifier, ExtensionEventBatch
 
@@ -32,6 +32,12 @@ class SystemCredentialRequest(BaseModel):
 
 class CreateTaskRunRequest(BaseModel):
     user_request: str = Field(min_length=1)
+
+
+class CreateTaskDetailRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    record_id: str = Field(min_length=1, max_length=128)
 
 
 class SelectObjectRequest(BaseModel):
@@ -324,6 +330,22 @@ def create_router(service_provider: Callable[[], Any]) -> APIRouter:
         service: Any = Depends(service_provider),
     ):
         return service.select_task_object(run_id, request.object_id)
+
+    @router.post(
+        "/task-runs/{run_id}/details",
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_task_detail_run(
+        run_id: UUID,
+        request: CreateTaskDetailRequest,
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.create_task_detail_run(run_id, request.record_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="task run record not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.get("/task-runs/{run_id}")
     def get_task_run(run_id: UUID, service: Any = Depends(service_provider)):

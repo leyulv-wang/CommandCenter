@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -671,5 +672,55 @@ class CommandCenterService:
         self.repository.save_task_run(identifier, payload)
         return payload
 
+    def create_task_detail_run(
+        self,
+        run_id: UUID | str,
+        record_id: str,
+    ) -> dict[str, Any]:
+        parent_run_id = UUID(str(run_id))
+        parent = self.repository.get_task_run(parent_run_id)
+        outputs = parent.get("final_response", {}).get("outputs")
+        selected_record = _find_record_by_id(outputs, record_id)
+        if selected_record is None:
+            raise KeyError("record is not present in the saved task result")
+
+        detail_run_id = uuid4()
+        result = self.execution_graph.invoke(
+            {
+                "user_request": "查看所选采购申请详情",
+                "task_context": {"selected_record": selected_record},
+            }
+        )
+        payload = {
+            "run_id": str(detail_run_id),
+            "parent_run_id": str(parent_run_id),
+            "user_request": "查看所选采购申请详情",
+            **jsonable_encoder(result),
+        }
+        self.repository.save_task_run(detail_run_id, payload)
+        return payload
+
     def get_task_run(self, run_id: UUID | str) -> dict[str, Any]:
         return self.repository.get_task_run(UUID(str(run_id)))
+
+
+def _find_record_by_id(
+    value: Any,
+    record_id: str,
+    *,
+    max_depth: int = 6,
+    max_values: int = 250,
+) -> dict[str, Any] | None:
+    queue = deque([(value, 0)])
+    visited = 0
+    while queue and visited < max_values:
+        current, depth = queue.popleft()
+        visited += 1
+        if isinstance(current, dict):
+            if "id" in current and str(current["id"]) == record_id:
+                return dict(current)
+            if depth < max_depth:
+                queue.extend((child, depth + 1) for child in current.values())
+        elif isinstance(current, list) and depth < max_depth:
+            queue.extend((child, depth + 1) for child in current)
+    return None

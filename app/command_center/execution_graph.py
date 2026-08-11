@@ -145,6 +145,7 @@ class ExecutionDependencies:
 
 class ExecutionState(TypedDict, total=False):
     user_request: str
+    task_context: dict[str, Any]
     selected_object_id: str
     tasks: list[dict[str, Any]]
     skills: list[SkillDefinition]
@@ -166,8 +167,17 @@ class ExecutionState(TypedDict, total=False):
 
 def build_execution_graph(dependencies: ExecutionDependencies):
     def load_context(state: ExecutionState) -> ExecutionState:
+        tasks = dependencies.business_reader.search_tasks(state["user_request"])
+        task_context = state.get("task_context")
+        if task_context and tasks:
+            first = dict(tasks[0])
+            first["content"] = {
+                **dict(first.get("content", {})),
+                **task_context,
+            }
+            tasks = [first, *tasks[1:]]
         return {
-            "tasks": dependencies.business_reader.search_tasks(state["user_request"]),
+            "tasks": tasks,
             "skills": dependencies.skills(),
             "tools": dependencies.tools() if dependencies.tools is not None else [],
             "status": "matching",

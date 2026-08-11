@@ -197,6 +197,94 @@ def test_service_persists_natural_language_task_run(tmp_path):
     )
 
 
+def test_service_creates_persisted_detail_run_from_saved_list_record(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    parent_run_id = uuid4()
+    repository.save_task_run(
+        parent_run_id,
+        {
+            "run_id": str(parent_run_id),
+            "user_request": "查询采购申请列表",
+            "status": "succeeded",
+            "final_response": {
+                "outputs": {
+                    "query": {
+                        "result": {
+                            "records": [
+                                {
+                                    "id": "2037430718812770305",
+                                    "applyNo": "10",
+                                    "applyBy": "孟明佳",
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+        },
+    )
+    execution = Graph(
+        {
+            "status": "succeeded",
+            "execution_mode": "tool",
+            "final_response": {"summary": "采购申请详情查询完成"},
+        }
+    )
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=execution,
+    )
+
+    detail = service.create_task_detail_run(
+        parent_run_id,
+        "2037430718812770305",
+    )
+
+    assert detail["run_id"] != str(parent_run_id)
+    assert detail["parent_run_id"] == str(parent_run_id)
+    assert detail["status"] == "succeeded"
+    assert execution.state == {
+        "user_request": "查看所选采购申请详情",
+        "task_context": {
+            "selected_record": {
+                "id": "2037430718812770305",
+                "applyNo": "10",
+                "applyBy": "孟明佳",
+            }
+        },
+    }
+    assert repository.get_task_run(detail["run_id"])["parent_run_id"] == str(
+        parent_run_id
+    )
+
+
+def test_service_rejects_detail_record_not_present_in_saved_result(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    parent_run_id = uuid4()
+    repository.save_task_run(
+        parent_run_id,
+        {
+            "run_id": str(parent_run_id),
+            "user_request": "查询采购申请列表",
+            "status": "succeeded",
+            "final_response": {
+                "outputs": {"query": {"result": {"records": [{"id": "row-1"}]}}}
+            },
+        },
+    )
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+    )
+
+    with pytest.raises(KeyError, match="record"):
+        service.create_task_detail_run(parent_run_id, "row-other")
+
+
 def test_service_persists_safe_extension_upload_failure(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
     extension = AbortableExtension()

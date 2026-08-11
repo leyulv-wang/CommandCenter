@@ -98,8 +98,10 @@ class DirectAgent(MatchingAgent):
         self.plan_status = plan_status
         self.direct_verification = direct_verification
         self.direct_verification_calls = 0
+        self.task_contexts = []
 
     def plan_tool_request(self, user_request, task_context, tools):
+        self.task_contexts.append(task_context)
         if self.plan_status == "matched":
             return DirectToolPlan(
                 status="matched",
@@ -370,3 +372,31 @@ def test_execution_graph_does_not_verify_failed_direct_tool_run():
     assert result["status"] == "failed"
     assert result["execution_mode"] == "tool"
     assert agents.direct_verification_calls == 0
+
+
+def test_execution_graph_passes_trusted_selected_record_to_tool_planner():
+    agents = DirectAgent()
+    graph = build_execution_graph(
+        ExecutionDependencies(
+            skills=lambda: [],
+            business_reader=UserRequestReader(),
+            agents=agents,
+            runner=RecordingRunner(),
+            tools=lambda: [read_tool()],
+            direct_runner=DirectRunner(),
+        )
+    )
+
+    graph.invoke(
+        {
+            "user_request": "查看所选采购申请详情",
+            "task_context": {
+                "selected_record": {"id": "row-1", "applyNo": "10"}
+            },
+        }
+    )
+
+    assert agents.task_contexts[0]["content"]["selected_record"] == {
+        "id": "row-1",
+        "applyNo": "10",
+    }

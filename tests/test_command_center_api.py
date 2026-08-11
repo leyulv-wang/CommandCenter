@@ -86,6 +86,14 @@ class FakeCommandCenterService:
     def select_task_object(self, run_id, object_id):
         return {"run_id": str(run_id), "status": "succeeded"}
 
+    def create_task_detail_run(self, run_id, record_id):
+        return {
+            "run_id": str(uuid4()),
+            "parent_run_id": str(run_id),
+            "status": "succeeded",
+            "selected_record_id": record_id,
+        }
+
     def get_task_run(self, run_id):
         return {"run_id": str(run_id), "status": "succeeded"}
 
@@ -171,6 +179,44 @@ def test_task_run_accepts_natural_language_request():
     assert response.status_code == 201
     assert response.json()["status"] == "succeeded"
     assert response.json()["final_response"]["summary"] == "采购创建并回写完成"
+
+
+def test_task_detail_run_accepts_only_selected_record_id():
+    parent_run_id = uuid4()
+    response = client_for(FakeCommandCenterService()).post(
+        f"/task-runs/{parent_run_id}/details",
+        json={"record_id": "2037430718812770305"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["parent_run_id"] == str(parent_run_id)
+    assert response.json()["selected_record_id"] == "2037430718812770305"
+
+
+def test_task_detail_run_rejects_browser_supplied_record_payload():
+    response = client_for(FakeCommandCenterService()).post(
+        f"/task-runs/{uuid4()}/details",
+        json={
+            "record_id": "row-1",
+            "selected_record": {"id": "row-other", "applyBy": "伪造值"},
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_task_detail_run_maps_missing_saved_record_to_404():
+    class MissingRecordService(FakeCommandCenterService):
+        def create_task_detail_run(self, run_id, record_id):
+            raise KeyError(record_id)
+
+    response = client_for(MissingRecordService()).post(
+        f"/task-runs/{uuid4()}/details",
+        json={"record_id": "not-saved"},
+    )
+
+    assert response.status_code == 404
+    assert "not-saved" not in response.text
 
 
 def test_system_connection_api_never_returns_the_submitted_credential():
