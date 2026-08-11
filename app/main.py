@@ -27,8 +27,13 @@ from app.command_center.system_connections import (
     KeyringSystemCredentialStore,
 )
 from app.command_center.extension_recorder import ExtensionRecorder
-from app.command_center.model import StructuredModel
+from app.command_center.langchain_purchase_agents import LangChainPurchaseAgents
+from app.command_center.model import StructuredModel, build_chat_model_from_environment
 from app.command_center.openapi_loader import OpenAPIDocumentLoader
+from app.command_center.purchase_tracking_graph import (
+    PurchaseTrackingDependencies,
+    build_purchase_tracking_graph,
+)
 from app.command_center.readonly_testing import ReadOnlySkillTestService
 from app.command_center.recorder import RecorderService
 from app.command_center.repository import CommandCenterRepository
@@ -314,6 +319,7 @@ def build_command_center_components(
     local_catalog: ToolCatalog | None = None,
     local_tester: Any | None = None,
     execution_graph: Any | None = None,
+    purchase_tracking_graph_factory: Any | None = None,
     openapi_loader: OpenAPIDocumentLoader | None = None,
 ) -> CommandCenterComponents:
     """Compose local and lazy real-system capabilities without contacting MES."""
@@ -400,13 +406,14 @@ def build_command_center_components(
             execution_catalog,
         )
 
+    execution_executor = ToolExecutor(
+        execution_catalog,
+        client,
+        credential_provider=system_credential_store.headers_for,
+        credential_invalidator=system_credential_store.delete,
+    )
+
     if execution_graph is None:
-        execution_executor = ToolExecutor(
-            execution_catalog,
-            client,
-            credential_provider=system_credential_store.headers_for,
-            credential_invalidator=system_credential_store.delete,
-        )
 
         def executable_tools():
             tools = []
@@ -438,6 +445,27 @@ def build_command_center_components(
                 ),
             )
         )
+
+    if purchase_tracking_graph_factory is None:
+        purchase_model = None
+
+        def purchase_tracking_graph_factory():
+            nonlocal purchase_model
+            if purchase_model is None:
+                purchase_model = build_chat_model_from_environment()
+            purchase_tools = [
+                tool
+                for tool in catalogs.get("yifeng_mes").definitions()
+                if tool.side_effect == "read"
+            ]
+            purchase_agents = LangChainPurchaseAgents(
+                model=purchase_model,
+                tools=purchase_tools,
+                executor=execution_executor,
+            )
+            return build_purchase_tracking_graph(
+                PurchaseTrackingDependencies(agents=purchase_agents)
+            )
 
     def readonly_tester_factory(
         system_code: str,
@@ -494,6 +522,7 @@ def build_command_center_components(
         system_credential_store=system_credential_store,
         connection_handshakes=connection_handshakes,
         system_skill_tester_factory=system_skill_tester_factory,
+        purchase_tracking_graph_factory=purchase_tracking_graph_factory,
     )
     return CommandCenterComponents(
         profiles=profiles,

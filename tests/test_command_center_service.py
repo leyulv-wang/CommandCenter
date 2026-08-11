@@ -285,6 +285,79 @@ def test_service_rejects_detail_record_not_present_in_saved_result(tmp_path):
         service.create_task_detail_run(parent_run_id, "row-other")
 
 
+def test_service_creates_purchase_progress_run_from_saved_record(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    parent_run_id = uuid4()
+    selected_record = {
+        "id": "application-1",
+        "applyNo": "CGSQ01",
+        "applyBy": "孟明佳",
+    }
+    repository.save_task_run(
+        parent_run_id,
+        {
+            "run_id": str(parent_run_id),
+            "user_request": "查询孟明佳的采购申请",
+            "status": "succeeded",
+            "final_response": {
+                "outputs": {"query": {"result": {"records": [selected_record]}}}
+            },
+        },
+    )
+    tracking = Graph(
+        {
+            "status": "succeeded",
+            "final_response": {
+                "summary": "采购链路已追踪",
+                "progress": {"status": "complete", "stages": []},
+            },
+        }
+    )
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+        purchase_tracking_graph_factory=lambda: tracking,
+    )
+
+    progress = service.create_purchase_progress_run(
+        parent_run_id,
+        "application-1",
+    )
+
+    assert tracking.state == {"selected_application": selected_record}
+    assert progress["parent_run_id"] == str(parent_run_id)
+    assert progress["run_id"] != str(parent_run_id)
+    assert repository.get_task_run(progress["run_id"])["status"] == "succeeded"
+
+
+def test_service_rejects_progress_record_not_present_in_saved_result(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    parent_run_id = uuid4()
+    repository.save_task_run(
+        parent_run_id,
+        {
+            "run_id": str(parent_run_id),
+            "user_request": "查询采购申请",
+            "status": "succeeded",
+            "final_response": {
+                "outputs": {"query": {"result": {"records": [{"id": "row-1"}]}}}
+            },
+        },
+    )
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+        purchase_tracking_graph_factory=lambda: Graph({"status": "succeeded"}),
+    )
+
+    with pytest.raises(KeyError, match="record"):
+        service.create_purchase_progress_run(parent_run_id, "row-other")
+
+
 def test_direct_tool_and_detail_runs_do_not_persist_skills(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
     execution = Graph(

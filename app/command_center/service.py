@@ -5,7 +5,7 @@ import re
 import threading
 from collections import deque
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -67,6 +67,7 @@ class CommandCenterService:
         system_credential_store: SystemCredentialStore | None = None,
         connection_handshakes: ConnectionHandshakeStore | None = None,
         system_skill_tester_factory: Any | None = None,
+        purchase_tracking_graph_factory: Callable[[], Any] | None = None,
     ):
         self.repository = repository
         self.recorder = recorder
@@ -79,6 +80,7 @@ class CommandCenterService:
         self.system_credential_store = system_credential_store
         self.connection_handshakes = connection_handshakes
         self.system_skill_tester_factory = system_skill_tester_factory
+        self.purchase_tracking_graph_factory = purchase_tracking_graph_factory
         self._analysis_lock = threading.Lock()
         self._active_analyses: set[UUID] = set()
 
@@ -698,6 +700,33 @@ class CommandCenterService:
             **jsonable_encoder(result),
         }
         self.repository.save_task_run(detail_run_id, payload)
+        return payload
+
+    def create_purchase_progress_run(
+        self,
+        run_id: UUID | str,
+        record_id: str,
+    ) -> dict[str, Any]:
+        parent_run_id = UUID(str(run_id))
+        parent = self.repository.get_task_run(parent_run_id)
+        outputs = parent.get("final_response", {}).get("outputs")
+        selected_record = _find_record_by_id(outputs, record_id)
+        if selected_record is None:
+            raise KeyError("record is not present in the saved task result")
+        if self.purchase_tracking_graph_factory is None:
+            raise RuntimeError("purchase tracking is not configured")
+
+        progress_run_id = uuid4()
+        result = self.purchase_tracking_graph_factory().invoke(
+            {"selected_application": selected_record}
+        )
+        payload = {
+            "run_id": str(progress_run_id),
+            "parent_run_id": str(parent_run_id),
+            "user_request": "追踪所选采购申请进度",
+            **jsonable_encoder(result),
+        }
+        self.repository.save_task_run(progress_run_id, payload)
         return payload
 
     def get_task_run(self, run_id: UUID | str) -> dict[str, Any]:
