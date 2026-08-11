@@ -1,4 +1,5 @@
 langgraph
+langchain>=1.2,<2
 langchain-openai
 fastapi
 uvicorn[standard]

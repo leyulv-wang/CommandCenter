@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from dotenv import load_dotenv
+from langchain_core.language_models import BaseChatModel
+from langchain_openai import ChatOpenAI
 from openai import OpenAI
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
@@ -75,6 +78,26 @@ class StructuredModel:
                         }
                     )
         raise ValueError(f"模型结构化输出连续两次校验失败：{last_error}")
+
+
+def build_chat_model_from_environment(
+    config_path: Path | None = None,
+) -> BaseChatModel:
+    path = config_path or Path(os.getenv("COMMAND_CENTER_AI_ENV_FILE", ".env.ai"))
+    load_dotenv(path, override=True)
+    try:
+        timeout = float(os.getenv("AI_CONFIG_TIMEOUT_SECONDS", "60"))
+    except ValueError as exc:
+        raise ValueError("model timeout must be a number") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("model timeout must be finite and greater than zero")
+    return ChatOpenAI(
+        base_url=_required_env("AI_CONFIG_MODEL_BASE_URL"),
+        api_key=SecretStr(_required_env("AI_CONFIG_API_KEY")),
+        model=_required_env("AI_CONFIG_MODEL_NAME"),
+        timeout=timeout,
+        temperature=0,
+    )
 
 
 def _jsonable(value: Any) -> Any:
