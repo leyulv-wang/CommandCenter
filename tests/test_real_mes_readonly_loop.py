@@ -483,6 +483,30 @@ class PurchaseChainAgent:
                 }
             }
 
+        if self.name == "purchase_trace_summary":
+            step_results = payload["step_results"]
+            orders = step_results[0]["normalized_output"]["result"]["records"]
+            receipts = (
+                step_results[1]["normalized_output"]["result"]["records"]
+                if len(step_results) > 1
+                else []
+            )
+            return {
+                "structured_response": {
+                    "status": (
+                        "complete" if orders and receipts else "business_pending"
+                    ),
+                    "summary": (
+                        "已查询采购订单和收货记录"
+                        if orders
+                        else "采购申请尚未生成采购订单"
+                    ),
+                    "evidence_step_ids": [
+                        result["step_id"] for result in step_results
+                    ],
+                }
+            }
+
         scope = payload["scope"]
         step_results = payload["step_results"]
         orders = step_results[0]["normalized_output"]["result"]["records"]

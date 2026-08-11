@@ -63,10 +63,17 @@ def step_result(*, status="succeeded"):
 
 
 class TrackingAgents:
-    def __init__(self, *, progress_status="complete", failed_step=False):
+    def __init__(
+        self,
+        *,
+        progress_status="complete",
+        failed_step=False,
+        empty_evidence=False,
+    ):
         self.calls = []
         self.progress_status = progress_status
         self.failed_step = failed_step
+        self.empty_evidence = empty_evidence
 
     def scope(self, application):
         self.calls.append("scope")
@@ -80,10 +87,16 @@ class TrackingAgents:
                 summary="追踪执行结束",
                 evidence_step_ids=["tool_01"],
             ),
-            step_results=[
-                step_result(status="failed" if self.failed_step else "succeeded")
-            ],
-            events=[{"step_id": "tool_01", "status": "succeeded"}],
+            step_results=(
+                []
+                if self.empty_evidence
+                else [step_result(status="failed" if self.failed_step else "succeeded")]
+            ),
+            events=(
+                []
+                if self.empty_evidence
+                else [{"step_id": "tool_01", "status": "succeeded"}]
+            ),
         )
 
     def verify(self, scope, draft, step_results):
@@ -144,3 +157,15 @@ def test_graph_rejects_selected_application_without_trusted_identity():
     assert agents.calls == []
     assert result["status"] == "failed"
     assert result["errors"] == ["所选采购申请缺少可信标识"]
+
+
+def test_graph_rejects_business_conclusion_without_tool_evidence():
+    agents = TrackingAgents(empty_evidence=True)
+
+    result = tracking_graph(agents).invoke(
+        {"selected_application": application_record()}
+    )
+
+    assert agents.calls == ["scope", "trace"]
+    assert result["status"] == "failed"
+    assert result["final_response"]["progress"]["status"] == "failed"

@@ -1,12 +1,16 @@
 from pathlib import Path
 from datetime import UTC, datetime
 import json
+from types import SimpleNamespace
 
 import pytest
+from langchain.agents.structured_output import ProviderStrategy
+from langgraph.errors import GraphRecursionError
 
 from app.command_center.langchain_purchase_agents import (
     LangChainPurchaseAgents,
     PurchaseTrackingLimitError,
+    PurchaseTrackingProtocolError,
 )
 from app.command_center.model import build_chat_model_from_environment
 from app.command_center.schemas import PurchaseTrackingScope, StepResult
@@ -123,17 +127,30 @@ class PurchaseExecutor:
 
 
 class ScriptedAgent:
-    def __init__(self, name, tools, calls, *, repeat_first_tool=False):
+    def __init__(
+        self,
+        name,
+        tools,
+        calls,
+        *,
+        repeat_first_tool=False,
+        skip_tools=False,
+        exhaust_loop=False,
+    ):
         self.name = name
         self.tools = list(tools)
         self.calls = calls
         self.repeat_first_tool = repeat_first_tool
+        self.skip_tools = skip_tools
+        self.exhaust_loop = exhaust_loop
 
     def invoke(self, payload, config=None):
         self.calls.append(self.name)
         if self.name == "purchase_scope":
             return {"structured_response": tracking_scope()}
         if self.name == "purchase_trace":
+            if self.skip_tools:
+                return {"messages": [SimpleNamespace(content="没有查询就直接结束")]}
             by_id = {
                 tool.metadata["tool_id"]: tool
                 for tool in self.tools
@@ -151,6 +168,10 @@ class ScriptedAgent:
             by_id["yifeng_mes:receiving_records"].invoke(
                 {"query": {"orderNumber": order_number}}
             )
+            if self.exhaust_loop:
+                raise GraphRecursionError("bounded exploration completed")
+            return {"messages": [SimpleNamespace(content="已查询订单和收货记录")]}
+        if self.name == "purchase_trace_summary":
             return {
                 "structured_response": {
                     "status": "complete",
@@ -176,13 +197,24 @@ class ScriptedAgent:
         }
 
 
-def scripted_factory(calls, *, repeat_first_tool=False):
+def scripted_factory(
+    calls,
+    *,
+    repeat_first_tool=False,
+    response_formats=None,
+    skip_tools=False,
+    exhaust_loop=False,
+):
     def factory(*, model, tools, system_prompt, response_format, name):
+        if response_formats is not None:
+            response_formats.append(response_format)
         return ScriptedAgent(
             name,
             tools,
             calls,
             repeat_first_tool=repeat_first_tool,
+            skip_tools=skip_tools,
+            exhaust_loop=exhaust_loop,
         )
 
     return factory
@@ -203,7 +235,7 @@ def test_trace_agent_uses_previous_tool_output_for_next_call():
 
     run = agents.trace(tracking_scope())
 
-    assert calls == ["purchase_trace"]
+    assert calls == ["purchase_trace", "purchase_trace_summary"]
     assert [result.tool_id for result in run.step_results] == [
         "yifeng_mes:purchase_orders",
         "yifeng_mes:receiving_records",
@@ -229,7 +261,37 @@ def test_purchase_agents_use_separate_langchain_roles():
     trace_run = agents.trace(scope_run.output)
     agents.verify(scope_run.output, trace_run.output, trace_run.step_results)
 
-    assert calls == ["purchase_scope", "purchase_trace", "purchase_verify"]
+    assert calls == [
+        "purchase_scope",
+        "purchase_trace",
+        "purchase_trace_summary",
+        "purchase_verify",
+    ]
+
+
+def test_purchase_agents_separate_tool_loop_from_provider_structured_summary():
+    calls = []
+    response_formats = []
+    executor = PurchaseExecutor()
+    agents = LangChainPurchaseAgents(
+        model=object(),
+        tools=[
+            purchase_tool("yifeng_mes:purchase_orders", "sourceCode"),
+            purchase_tool("yifeng_mes:receiving_records", "orderNumber"),
+        ],
+        executor=executor,
+        agent_factory=scripted_factory(calls, response_formats=response_formats),
+    )
+
+    scope_run = agents.scope(tracking_scope().application)
+    trace_run = agents.trace(scope_run.output)
+    agents.verify(scope_run.output, trace_run.output, trace_run.step_results)
+
+    assert len(response_formats) == 4
+    assert isinstance(response_formats[0], ProviderStrategy)
+    assert response_formats[1] is None
+    assert isinstance(response_formats[2], ProviderStrategy)
+    assert isinstance(response_formats[3], ProviderStrategy)
 
 
 def test_agent_adapter_rejects_write_tool_before_model_invocation():
@@ -262,3 +324,55 @@ def test_agent_adapter_stops_after_tool_limit():
 
     with pytest.raises(PurchaseTrackingLimitError, match="Tool call limit"):
         agents.trace(tracking_scope())
+
+
+def test_agent_adapter_reuses_duplicate_read_call_without_spending_budget():
+    executor = PurchaseExecutor()
+    agents = LangChainPurchaseAgents(
+        model=object(),
+        tools=[
+            purchase_tool("yifeng_mes:purchase_orders", "sourceCode"),
+            purchase_tool("yifeng_mes:receiving_records", "orderNumber"),
+        ],
+        executor=executor,
+        agent_factory=scripted_factory([], repeat_first_tool=True),
+        max_tool_calls=2,
+    )
+
+    run = agents.trace(tracking_scope())
+
+    assert len(executor.commands) == 2
+    assert [result.step_id for result in run.step_results] == ["tool_01", "tool_02"]
+
+
+def test_trace_summarizes_collected_evidence_when_loop_budget_is_exhausted():
+    executor = PurchaseExecutor()
+    agents = LangChainPurchaseAgents(
+        model=object(),
+        tools=[
+            purchase_tool("yifeng_mes:purchase_orders", "sourceCode"),
+            purchase_tool("yifeng_mes:receiving_records", "orderNumber"),
+        ],
+        executor=executor,
+        agent_factory=scripted_factory([], exhaust_loop=True),
+    )
+
+    run = agents.trace(tracking_scope())
+
+    assert len(run.step_results) == 2
+    assert run.output.status == "complete"
+
+
+def test_trace_agent_rejects_business_conclusion_without_tool_evidence():
+    calls = []
+    agents = LangChainPurchaseAgents(
+        model=object(),
+        tools=[purchase_tool("yifeng_mes:purchase_orders", "sourceCode")],
+        executor=PurchaseExecutor(),
+        agent_factory=scripted_factory(calls, skip_tools=True),
+    )
+
+    with pytest.raises(PurchaseTrackingProtocolError, match="Tool evidence"):
+        agents.trace(tracking_scope())
+
+    assert calls == ["purchase_trace", "purchase_trace"]

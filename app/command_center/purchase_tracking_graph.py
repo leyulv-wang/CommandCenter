@@ -96,6 +96,13 @@ def build_purchase_tracking_graph(dependencies: PurchaseTrackingDependencies):
                 events=state.get("events", []),
             )
         events = [*state.get("events", []), *run.events]
+        if not run.step_results:
+            return _failure_state(
+                state["scope"].application,
+                error="采购进度追踪发生技术错误",
+                summary="采购追踪没有获得真实 Tool 证据",
+                events=events,
+            )
         if any(result.status != "succeeded" for result in run.step_results):
             return _failure_state(
                 state["scope"].application,

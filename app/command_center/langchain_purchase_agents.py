@@ -4,12 +4,14 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from threading import Lock
 from typing import Any, Callable, Generic, Protocol, TypeVar
 from uuid import UUID, uuid4
 
 from langchain.agents import create_agent
-from langchain.agents.structured_output import ToolStrategy
+from langchain.agents.structured_output import ProviderStrategy
 from langchain_core.tools import StructuredTool
+from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.command_center.schemas import (
@@ -33,6 +35,11 @@ _TRACE_PROMPT = (
     "你是采购进度追踪执行智能体。使用允许的只读 Tool，从采购申请逐步查询采购订单、"
     "收货和入库证据。每次读取 Tool 返回后再决定下一步。允许不存在订单或收货记录，"
     "这属于业务尚未推进；不得调用写操作，不得编造关联字段或结果。"
+    "scope.application 是系统已经读取并校验过的可信起点，不要再调用 Tool 复查该采购申请；"
+    "优先从其业务关联字段继续查询下游记录。相同 Tool 与相同关联参数成功返回后不要重复调用。"
+    "调用预算有限，应在订单、收货和入库三个下游阶段之间分配查询。"
+    "在输出任何业务结论前必须至少实际调用一个查询 Tool；仅凭采购申请字段不能判断"
+    "是否已经生成订单、收货或入库。"
 )
 _VERIFY_PROMPT = (
     "你是采购追踪证据验证与总结智能体。核对采购申请、订单、收货和入库记录的关联，"
@@ -73,11 +80,44 @@ class _ToolRunLedger:
     run_id: UUID
     max_tool_calls: int
     step_results: list[StepResult] = field(default_factory=list)
+    _results_by_key: dict[str, StepResult] = field(default_factory=dict)
+    _lock: Lock = field(default_factory=Lock)
 
-    def next_step_id(self) -> str:
-        if len(self.step_results) >= self.max_tool_calls:
-            raise PurchaseTrackingLimitError("Tool call limit exceeded")
-        return f"tool_{len(self.step_results) + 1:02d}"
+    def execute_once(
+        self,
+        *,
+        tool: ToolDefinition,
+        arguments: dict[str, Any],
+        executor: ToolExecutorLike,
+    ) -> StepResult:
+        key = json.dumps(
+            {"tool_id": tool.tool_id, "arguments": arguments},
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        # LangChain may schedule multiple Tool calls concurrently. Serializing the
+        # small read-only MVP ledger guarantees unique step IDs and prevents an
+        # identical successful query from consuming the bounded request budget.
+        with self._lock:
+            cached = self._results_by_key.get(key)
+            if cached is not None:
+                return cached
+            if len(self.step_results) >= self.max_tool_calls:
+                raise PurchaseTrackingLimitError("Tool call limit exceeded")
+            step_id = f"tool_{len(self.step_results) + 1:02d}"
+            result = executor.execute(
+                ExecutionCommand(
+                    run_id=self.run_id,
+                    step_id=step_id,
+                    tool_id=tool.tool_id,
+                    arguments=arguments,
+                    reason="采购追踪智能体选择了已授权的只读 Tool",
+                )
+            )
+            self.step_results.append(result)
+            self._results_by_key[key] = result
+            return result
 
 
 class LangChainPurchaseAgents:
@@ -131,14 +171,54 @@ class LangChainPurchaseAgents:
             name="purchase_trace",
             tools=agent_tools,
             prompt=_TRACE_PROMPT,
+            schema=None,
+        )
+        payload = {
+            "scope": scope.model_dump(mode="json"),
+            "available_tools": [_compact_tool(tool) for tool in self.tools],
+        }
+        try:
+            loop_result = self._invoke_agent(agent, payload)
+        except GraphRecursionError:
+            if not ledger.step_results:
+                raise
+            # The loop is intentionally bounded. Evidence already collected is
+            # handed to the independent structured summarizer and verifier,
+            # which decide whether it is complete, pending, or insufficient.
+            loop_result = {"messages": []}
+        if not ledger.step_results:
+            loop_result = self._invoke_agent(
+                agent,
+                {
+                    **payload,
+                    "protocol_correction": (
+                        "上一次没有调用任何 Tool，因此没有资格形成业务结论。"
+                        "请先调用至少一个与当前目标相关的只读查询 Tool，再根据真实返回作答。"
+                    ),
+                },
+            )
+        if not ledger.step_results:
+            raise PurchaseTrackingProtocolError(
+                "purchase tracking requires Tool evidence before conclusion"
+            )
+        summary_agent = self._create_agent(
+            name="purchase_trace_summary",
+            tools=[],
+            prompt=(
+                "你是采购追踪执行结果整理智能体。只能根据已执行 Tool 的真实 StepResult "
+                "生成结构化追踪草稿，不得添加未查询到的业务事实。"
+            ),
             schema=PurchaseTrackingDraft,
         )
         output = self._invoke_structured(
-            agent,
+            summary_agent,
             PurchaseTrackingDraft,
             {
                 "scope": scope.model_dump(mode="json"),
-                "available_tools": [_compact_tool(tool) for tool in self.tools],
+                "tool_loop_summary": _last_message_content(loop_result),
+                "step_results": [
+                    result.model_dump(mode="json") for result in ledger.step_results
+                ],
             },
         )
         return PurchaseAgentRun(
@@ -178,13 +258,13 @@ class LangChainPurchaseAgents:
         name: str,
         tools: list[Any],
         prompt: str,
-        schema: type[SchemaT],
+        schema: type[SchemaT] | None,
     ) -> Any:
         return self.agent_factory(
             model=self.model,
             tools=tools,
             system_prompt=prompt,
-            response_format=ToolStrategy(schema),
+            response_format=ProviderStrategy(schema) if schema is not None else None,
             name=name,
         )
 
@@ -194,6 +274,18 @@ class LangChainPurchaseAgents:
         schema: type[SchemaT],
         payload: dict[str, Any],
     ) -> SchemaT:
+        result = self._invoke_agent(agent, payload)
+        if not isinstance(result, dict) or "structured_response" not in result:
+            raise PurchaseTrackingProtocolError(
+                "LangChain agent did not return a structured response"
+            )
+        return schema.model_validate(result["structured_response"])
+
+    def _invoke_agent(
+        self,
+        agent: Any,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         result = agent.invoke(
             {
                 "messages": [
@@ -205,11 +297,9 @@ class LangChainPurchaseAgents:
             },
             config={"recursion_limit": self.recursion_limit},
         )
-        if not isinstance(result, dict) or "structured_response" not in result:
-            raise PurchaseTrackingProtocolError(
-                "LangChain agent did not return a structured response"
-            )
-        return schema.model_validate(result["structured_response"])
+        if not isinstance(result, dict):
+            raise PurchaseTrackingProtocolError("LangChain agent returned invalid state")
+        return result
 
     def _agent_tool(
         self,
@@ -227,20 +317,14 @@ class LangChainPurchaseAgents:
                 "body": body or {},
             }
             validate_tool_arguments(tool, arguments)
-            step_id = ledger.next_step_id()
-            result = self.executor.execute(
-                ExecutionCommand(
-                    run_id=ledger.run_id,
-                    step_id=step_id,
-                    tool_id=tool.tool_id,
-                    arguments=arguments,
-                    reason="采购追踪智能体选择了已授权的只读 Tool",
-                )
+            result = ledger.execute_once(
+                tool=tool,
+                arguments=arguments,
+                executor=self.executor,
             )
-            ledger.step_results.append(result)
             return json.dumps(
                 {
-                    "step_id": step_id,
+                    "step_id": result.step_id,
                     "status": result.status,
                     "output": result.normalized_output,
                     "error": result.error,
@@ -314,3 +398,16 @@ def _safe_tool_event(result: StepResult) -> dict[str, Any]:
             if key in result.response_summary
         },
     }
+
+
+def _last_message_content(result: dict[str, Any]) -> str:
+    messages = result.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return "Tool Loop 已结束，业务结论必须以 StepResult 为准。"
+    last = messages[-1]
+    content = getattr(last, "content", None)
+    if content is None and isinstance(last, dict):
+        content = last.get("content")
+    if isinstance(content, str):
+        return content[:4_000]
+    return json.dumps(content, ensure_ascii=False, default=str)[:4_000]
