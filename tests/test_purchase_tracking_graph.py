@@ -68,11 +68,13 @@ class TrackingAgents:
         *,
         progress_status="complete",
         failed_step=False,
+        mixed_steps=False,
         empty_evidence=False,
     ):
         self.calls = []
         self.progress_status = progress_status
         self.failed_step = failed_step
+        self.mixed_steps = mixed_steps
         self.empty_evidence = empty_evidence
 
     def scope(self, application):
@@ -90,7 +92,11 @@ class TrackingAgents:
             step_results=(
                 []
                 if self.empty_evidence
-                else [step_result(status="failed" if self.failed_step else "succeeded")]
+                else (
+                    [step_result(status="failed"), step_result(status="succeeded")]
+                    if self.mixed_steps
+                    else [step_result(status="failed" if self.failed_step else "succeeded")]
+                )
             ),
             events=(
                 []
@@ -145,6 +151,18 @@ def test_graph_marks_failed_tool_as_technical_failure_without_verification():
     assert result["status"] == "failed"
     assert result["errors"] == ["采购进度追踪发生技术错误"]
     assert result["final_response"]["progress"]["status"] == "failed"
+
+
+def test_graph_lets_verifier_judge_mixed_success_and_transient_failure():
+    agents = TrackingAgents(mixed_steps=True, progress_status="business_pending")
+
+    result = tracking_graph(agents).invoke(
+        {"selected_application": application_record()}
+    )
+
+    assert agents.calls == ["scope", "trace", "verify"]
+    assert result["status"] == "succeeded"
+    assert result["final_response"]["progress"]["status"] == "business_pending"
 
 
 def test_graph_rejects_selected_application_without_trusted_identity():
