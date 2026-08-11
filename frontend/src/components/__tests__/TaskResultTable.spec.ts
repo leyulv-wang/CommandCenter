@@ -116,6 +116,32 @@ describe('TaskResultTable', () => {
     expect(wrapper.emitted('view-detail')).toEqual([['row-1']])
   })
 
+  it('emits the trusted row id for purchase progress tracking', async () => {
+    const wrapper = mount(TaskResultTable, {
+      props: {
+        outputs: {
+          records: [{ id: 'row-1', applyNo: 'CGSQ01' }],
+        },
+        allowProgress: true,
+      },
+    })
+
+    await wrapper.get('[data-testid="track-progress"]').trigger('click')
+
+    expect(wrapper.emitted('track-progress')).toEqual([['row-1']])
+  })
+
+  it('does not offer progress tracking without a purchase application number', () => {
+    const wrapper = mount(TaskResultTable, {
+      props: {
+        outputs: { records: [{ id: 'row-1', applyBy: '孟明佳' }] },
+        allowProgress: true,
+      },
+    })
+
+    expect(wrapper.find('[data-testid="track-progress"]').exists()).toBe(false)
+  })
+
   it('does not offer details for id-less rows or object-only output', () => {
     const rows = mount(TaskResultTable, {
       props: {

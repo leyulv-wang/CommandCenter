@@ -6,6 +6,7 @@ import NaturalLanguageTaskPanel from '../NaturalLanguageTaskPanel.vue'
 const api = vi.hoisted(() => ({
   createTaskRun: vi.fn(),
   createTaskDetailRun: vi.fn(),
+  createPurchaseProgressRun: vi.fn(),
   selectTaskObject: vi.fn(),
 }))
 
@@ -20,7 +21,9 @@ describe('NaturalLanguageTaskPanel', () => {
       execution_mode: 'tool',
       final_response: {
         summary: '查询完成',
-        outputs: { query: { result: { records: [{ id: 'A-1' }] } } },
+        outputs: {
+          query: { result: { records: [{ id: 'A-1', applyNo: 'CGSQ01' }] } },
+        },
       },
     })
     api.createTaskDetailRun.mockReset().mockResolvedValue({
@@ -32,6 +35,37 @@ describe('NaturalLanguageTaskPanel', () => {
       final_response: {
         summary: '详情查询完成',
         outputs: { main: { result: { id: 'A-1', applyNo: 'CGSQ01' } } },
+      },
+    })
+    api.createPurchaseProgressRun.mockReset().mockResolvedValue({
+      run_id: 'progress-1',
+      parent_run_id: 'run-1',
+      user_request: '追踪所选采购申请进度',
+      status: 'succeeded',
+      final_response: {
+        summary: '采购订单已生成并找到收货记录',
+        progress: {
+          status: 'complete',
+          summary: '采购订单已生成并找到收货记录',
+          stages: [
+            {
+              stage: 'application',
+              status: 'completed',
+              summary: '采购申请已找到',
+              record_count: 1,
+              records: [{ id: 'A-1', applyNo: 'CGSQ01' }],
+              evidence_step_ids: [],
+            },
+            {
+              stage: 'order',
+              status: 'completed',
+              summary: '采购订单已生成',
+              record_count: 1,
+              records: [{ orderNumber: 'CGDD01' }],
+              evidence_step_ids: ['tool_01'],
+            },
+          ],
+        },
       },
     })
   })
@@ -101,5 +135,37 @@ describe('NaturalLanguageTaskPanel', () => {
 
     expect(wrapper.get('[data-testid="detail-error"]').text()).toContain('详情服务暂不可用')
     expect(wrapper.get('table').text()).toContain('A-1')
+  })
+
+  it('keeps the query result visible and renders purchase progress', async () => {
+    const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
+    await wrapper.get('textarea').setValue('查询孟明佳的采购申请')
+    await wrapper.get('.command-input button').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="track-progress"]').trigger('click')
+    await flushPromises()
+
+    expect(api.createPurchaseProgressRun).toHaveBeenCalledWith('run-1', 'A-1')
+    expect(wrapper.get('table').text()).toContain('CGSQ01')
+    expect(wrapper.get('[data-testid="purchase-progress"]').text()).toContain(
+      '采购订单已生成',
+    )
+  })
+
+  it('shows a progress error without erasing the query result', async () => {
+    api.createPurchaseProgressRun.mockRejectedValueOnce(new Error('追踪服务暂不可用'))
+    const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
+    await wrapper.get('textarea').setValue('查询孟明佳的采购申请')
+    await wrapper.get('.command-input button').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="track-progress"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="progress-error"]').text()).toContain(
+      '追踪服务暂不可用',
+    )
+    expect(wrapper.get('table').text()).toContain('CGSQ01')
   })
 })

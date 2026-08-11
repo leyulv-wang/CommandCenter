@@ -191,8 +191,30 @@ export interface TaskRunView {
     observed_state?: Record<string, unknown>
     tool_evidence?: Array<Record<string, unknown>>
     verification?: Record<string, unknown>
+    progress?: PurchaseProgressResult
   }
   errors?: string[]
+}
+
+export type PurchaseProgressStatus =
+  | 'complete'
+  | 'business_pending'
+  | 'incomplete'
+  | 'failed'
+
+export interface PurchaseProgressStage {
+  stage: 'application' | 'order' | 'receiving' | 'warehouse'
+  status: 'completed' | 'in_progress' | 'pending' | 'not_found' | 'failed'
+  summary: string
+  record_count: number
+  records: Array<Record<string, unknown>>
+  evidence_step_ids: string[]
+}
+
+export interface PurchaseProgressResult {
+  status: PurchaseProgressStatus
+  summary: string
+  stages: PurchaseProgressStage[]
 }
 
 export interface SystemConnectionView {

@@ -52,6 +52,13 @@ export function createTaskDetailRun(parentRunId: string, recordId: string) {
   })
 }
 
+export function createPurchaseProgressRun(parentRunId: string, recordId: string) {
+  return request<TaskRunView>(`/task-runs/${parentRunId}/purchase-progress`, {
+    method: 'POST',
+    body: JSON.stringify({ record_id: recordId }),
+  })
+}
+
 export function selectTaskObject(runId: string, objectId: string) {
   return request<TaskRunView>(`/task-runs/${runId}/select-object`, {
     method: 'POST',

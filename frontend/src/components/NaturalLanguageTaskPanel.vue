@@ -28,7 +28,9 @@
         v-if="run.final_response?.outputs"
         :outputs="run.final_response.outputs"
         :allow-details="canViewDetails"
+        :allow-progress="canTrackProgress"
         @view-detail="viewDetails"
+        @track-progress="trackProgress"
       />
 
       <div v-if="run.status === 'needs_object_selection'" class="object-choice">
@@ -63,6 +65,17 @@
         </div>
       </template>
     </section>
+
+    <section v-if="progressRunning || progressRun || progressError" class="progress-state">
+      <p v-if="progressRunning" data-testid="progress-loading">正在追踪采购进度…</p>
+      <p v-if="progressError" data-testid="progress-error" class="run-error">
+        {{ progressError }}
+      </p>
+      <PurchaseProgress
+        v-if="progressRun?.final_response?.progress"
+        :progress="progressRun.final_response.progress"
+      />
+    </section>
   </section>
 </template>
 
@@ -70,12 +83,14 @@
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
+  createPurchaseProgressRun,
   createTaskDetailRun,
   createTaskRun,
   selectTaskObject,
 } from '../api/commandCenter'
 import type { TaskRunView } from '../api/types'
 import TaskResultTable from './TaskResultTable.vue'
+import PurchaseProgress from './PurchaseProgress.vue'
 
 const userRequest = ref('')
 const running = ref(false)
@@ -83,8 +98,14 @@ const run = ref<TaskRunView | null>(null)
 const detailRunning = ref(false)
 const detailRun = ref<TaskRunView | null>(null)
 const detailError = ref('')
+const progressRunning = ref(false)
+const progressRun = ref<TaskRunView | null>(null)
+const progressError = ref('')
 const terminal = computed(() => ['succeeded', 'failed'].includes(run.value?.status || ''))
 const canViewDetails = computed(
+  () => run.value?.status === 'succeeded' && run.value.execution_mode === 'tool',
+)
+const canTrackProgress = computed(
   () => run.value?.status === 'succeeded' && run.value.execution_mode === 'tool',
 )
 const statusLabel = computed(() => ({
@@ -105,12 +126,29 @@ async function submit() {
   running.value = true
   detailRun.value = null
   detailError.value = ''
+  progressRun.value = null
+  progressError.value = ''
   try {
     run.value = await createTaskRun(userRequest.value)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '任务发起失败')
   } finally {
     running.value = false
+  }
+}
+
+async function trackProgress(recordId: string) {
+  if (!run.value) return
+  progressRunning.value = true
+  progressRun.value = null
+  progressError.value = ''
+  try {
+    progressRun.value = await createPurchaseProgressRun(run.value.run_id, recordId)
+  } catch (error) {
+    progressError.value = error instanceof Error ? error.message : '采购进度追踪失败'
+    ElMessage.error(progressError.value)
+  } finally {
+    progressRunning.value = false
   }
 }
 
@@ -164,6 +202,8 @@ async function chooseObject(objectId: string) {
 .detail-state > p { color: var(--muted); }
 .detail-output { border-top: 1px dashed var(--border); margin-top: 14px; padding-top: 12px; }
 .detail-output > strong { color: var(--muted); font: 700 12px var(--font-mono); }
+.progress-state { border-top: 1px solid var(--border); min-width: 0; padding-top: 18px; }
+.progress-state > p { color: var(--muted); }
 @media (max-width: 760px) {
   .command-panel { grid-template-columns: 1fr; }
   .command-input { flex-direction: column; }

@@ -10,7 +10,7 @@
           <thead>
             <tr>
               <th v-for="column in columns" :key="column">{{ column }}</th>
-              <th v-if="hasDetailActions">操作</th>
+              <th v-if="hasRowActions">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -22,7 +22,7 @@
               <td v-for="column in columns" :key="column">
                 {{ formatValue(row[column]) }}
               </td>
-              <td v-if="hasDetailActions" class="action-cell">
+              <td v-if="hasRowActions" class="action-cell">
                 <button
                   v-if="detailRecordId(row)"
                   type="button"
@@ -30,6 +30,14 @@
                   @click="emit('view-detail', detailRecordId(row)!)"
                 >
                   查看详情
+                </button>
+                <button
+                  v-if="progressRecordId(row)"
+                  type="button"
+                  data-testid="track-progress"
+                  @click="emit('track-progress', progressRecordId(row)!)"
+                >
+                  追踪采购进度
                 </button>
               </td>
             </tr>
@@ -62,10 +70,14 @@ const props = withDefaults(
   defineProps<{
     outputs: Record<string, unknown>
     allowDetails?: boolean
+    allowProgress?: boolean
   }>(),
-  { allowDetails: false },
+  { allowDetails: false, allowProgress: false },
 )
-const emit = defineEmits<{ 'view-detail': [recordId: string] }>()
+const emit = defineEmits<{
+  'view-detail': [recordId: string]
+  'track-progress': [recordId: string]
+}>()
 
 const rows = computed(() => findRecordArray(props.outputs))
 const displayObject = computed(() => findDisplayObject(props.outputs))
@@ -81,6 +93,10 @@ const columns = computed(() => {
 const hasDetailActions = computed(
   () => props.allowDetails && Boolean(rows.value?.some(detailRecordId)),
 )
+const hasProgressActions = computed(
+  () => props.allowProgress && Boolean(rows.value?.some(progressRecordId)),
+)
+const hasRowActions = computed(() => hasDetailActions.value || hasProgressActions.value)
 const rawOutput = computed(() => JSON.stringify(props.outputs, null, 2))
 
 function findRecordArray(root: unknown): Row[] | null {
@@ -142,6 +158,13 @@ function rowKey(row: Row, index: number): string {
 function detailRecordId(row: Row): string | null {
   return typeof row.id === 'string' && row.id.trim() ? row.id : null
 }
+
+function progressRecordId(row: Row): string | null {
+  const recordId = detailRecordId(row)
+  return recordId && typeof row.applyNo === 'string' && row.applyNo.trim()
+    ? recordId
+    : null
+}
 </script>
 
 <style scoped>
@@ -154,6 +177,7 @@ th, td { border-bottom: 1px solid var(--border); max-width: 260px; padding: 10px
 th { background: color-mix(in srgb, var(--surface) 88%, var(--ink)); color: var(--muted); font-size: 12px; font-weight: 700; position: sticky; top: 0; z-index: 1; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: color-mix(in srgb, var(--signal-soft) 52%, transparent); }
+.action-cell { display: flex; gap: 6px; }
 .action-cell button { background: transparent; border: 1px solid var(--signal); border-radius: 6px; color: var(--signal); cursor: pointer; padding: 5px 9px; white-space: nowrap; }
 .empty-result { background: var(--signal-soft); border-radius: 8px; color: var(--muted); padding: 14px; }
 .object-result { display: grid; grid-template-columns: minmax(100px, auto) 1fr; margin: 0; }
