@@ -5,6 +5,7 @@ import NaturalLanguageTaskPanel from '../NaturalLanguageTaskPanel.vue'
 
 const api = vi.hoisted(() => ({
   createTaskRun: vi.fn(),
+  createTaskDetailRun: vi.fn(),
   selectTaskObject: vi.fn(),
 }))
 
@@ -16,9 +17,21 @@ describe('NaturalLanguageTaskPanel', () => {
       run_id: 'run-1',
       user_request: '查询采购申请列表',
       status: 'succeeded',
+      execution_mode: 'tool',
       final_response: {
         summary: '查询完成',
         outputs: { query: { result: { records: [{ id: 'A-1' }] } } },
+      },
+    })
+    api.createTaskDetailRun.mockReset().mockResolvedValue({
+      run_id: 'detail-1',
+      parent_run_id: 'run-1',
+      user_request: '查看所选采购申请详情',
+      status: 'succeeded',
+      execution_mode: 'tool',
+      final_response: {
+        summary: '详情查询完成',
+        outputs: { main: { result: { id: 'A-1', applyNo: 'CGSQ01' } } },
       },
     })
   })
@@ -37,5 +50,56 @@ describe('NaturalLanguageTaskPanel', () => {
     expect(wrapper.text()).toContain('查询完成')
     expect(wrapper.get('table').text()).toContain('A-1')
     expect(wrapper.get('details').attributes('open')).toBeUndefined()
+  })
+
+  it('keeps the list visible while loading and then renders selected details', async () => {
+    let resolveDetail!: (value: unknown) => void
+    api.createTaskDetailRun.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveDetail = resolve
+      }),
+    )
+    const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
+    await wrapper.get('textarea').setValue('查询采购申请列表')
+    await wrapper.get('.command-input button').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="view-detail"]').trigger('click')
+
+    expect(api.createTaskDetailRun).toHaveBeenCalledWith('run-1', 'A-1')
+    expect(wrapper.get('table').text()).toContain('A-1')
+    expect(wrapper.get('[data-testid="detail-loading"]').text()).toContain('正在查询详情')
+
+    resolveDetail({
+      run_id: 'detail-1',
+      parent_run_id: 'run-1',
+      user_request: '查看所选采购申请详情',
+      status: 'succeeded',
+      execution_mode: 'tool',
+      final_response: {
+        summary: '详情查询完成',
+        outputs: { main: { result: { id: 'A-1', applyNo: 'CGSQ01' } } },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('所选采购申请详情')
+    expect(wrapper.text()).toContain('详情查询完成')
+    expect(wrapper.findAll('table')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="object-result"]').text()).toContain('CGSQ01')
+  })
+
+  it('shows a detail error without erasing the list result', async () => {
+    api.createTaskDetailRun.mockRejectedValueOnce(new Error('详情服务暂不可用'))
+    const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
+    await wrapper.get('textarea').setValue('查询采购申请列表')
+    await wrapper.get('.command-input button').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="view-detail"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="detail-error"]').text()).toContain('详情服务暂不可用')
+    expect(wrapper.get('table').text()).toContain('A-1')
   })
 })

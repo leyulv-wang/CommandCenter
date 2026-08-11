@@ -45,6 +45,13 @@ export function createTaskRun(userRequest: string) {
   })
 }
 
+export function createTaskDetailRun(parentRunId: string, recordId: string) {
+  return request<TaskRunView>(`/task-runs/${parentRunId}/details`, {
+    method: 'POST',
+    body: JSON.stringify({ record_id: recordId }),
+  })
+}
+
 export function selectTaskObject(runId: string, objectId: string) {
   return request<TaskRunView>(`/task-runs/${runId}/select-object`, {
     method: 'POST',

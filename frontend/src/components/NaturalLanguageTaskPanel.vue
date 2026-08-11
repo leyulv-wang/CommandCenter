@@ -27,6 +27,8 @@
       <TaskResultTable
         v-if="run.final_response?.outputs"
         :outputs="run.final_response.outputs"
+        :allow-details="canViewDetails"
+        @view-detail="viewDetails"
       />
 
       <div v-if="run.status === 'needs_object_selection'" class="object-choice">
@@ -42,22 +44,52 @@
         </button>
       </div>
     </div>
+
+    <section v-if="detailRunning || detailRun || detailError" class="detail-state">
+      <h3>所选采购申请详情</h3>
+      <p v-if="detailRunning" data-testid="detail-loading">正在查询详情…</p>
+      <p v-if="detailError" data-testid="detail-error" class="run-error">
+        {{ detailError }}
+      </p>
+      <template v-if="detailRun?.final_response">
+        <p>{{ detailRun.final_response.summary }}</p>
+        <div
+          v-for="(output, stepId) in detailRun.final_response.outputs || {}"
+          :key="stepId"
+          class="detail-output"
+        >
+          <strong>{{ stepId }}</strong>
+          <TaskResultTable :outputs="{ [stepId]: output }" />
+        </div>
+      </template>
+    </section>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { createTaskRun, selectTaskObject } from '../api/commandCenter'
+import {
+  createTaskDetailRun,
+  createTaskRun,
+  selectTaskObject,
+} from '../api/commandCenter'
 import type { TaskRunView } from '../api/types'
 import TaskResultTable from './TaskResultTable.vue'
 
 const userRequest = ref('')
 const running = ref(false)
 const run = ref<TaskRunView | null>(null)
+const detailRunning = ref(false)
+const detailRun = ref<TaskRunView | null>(null)
+const detailError = ref('')
 const terminal = computed(() => ['succeeded', 'failed'].includes(run.value?.status || ''))
+const canViewDetails = computed(
+  () => run.value?.status === 'succeeded' && run.value.execution_mode === 'tool',
+)
 const statusLabel = computed(() => ({
   matching: '正在理解任务',
+  needs_input: '需要补充任务信息',
   needs_object_selection: '需要选择业务对象',
   executing: '正在执行 Skill',
   verifying: '正在核对业务结果',
@@ -71,12 +103,29 @@ async function submit() {
     return
   }
   running.value = true
+  detailRun.value = null
+  detailError.value = ''
   try {
     run.value = await createTaskRun(userRequest.value)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '任务发起失败')
   } finally {
     running.value = false
+  }
+}
+
+async function viewDetails(recordId: string) {
+  if (!run.value) return
+  detailRunning.value = true
+  detailRun.value = null
+  detailError.value = ''
+  try {
+    detailRun.value = await createTaskDetailRun(run.value.run_id, recordId)
+  } catch (error) {
+    detailError.value = error instanceof Error ? error.message : '详情查询失败'
+    ElMessage.error(detailError.value)
+  } finally {
+    detailRunning.value = false
   }
 }
 
@@ -110,6 +159,11 @@ async function chooseObject(objectId: string) {
 .object-choice { display: grid; gap: 8px; margin-top: 14px; }
 .object-choice button { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--ink); cursor: pointer; display: flex; justify-content: space-between; padding: 12px 14px; text-align: left; }
 .object-choice small { color: var(--muted); }
+.detail-state { border-top: 1px solid var(--border); min-width: 0; padding-top: 18px; }
+.detail-state h3 { font-size: 18px; margin: 0 0 10px; }
+.detail-state > p { color: var(--muted); }
+.detail-output { border-top: 1px dashed var(--border); margin-top: 14px; padding-top: 12px; }
+.detail-output > strong { color: var(--muted); font: 700 12px var(--font-mono); }
 @media (max-width: 760px) {
   .command-panel { grid-template-columns: 1fr; }
   .command-input { flex-direction: column; }

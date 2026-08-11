@@ -10,12 +10,27 @@
           <thead>
             <tr>
               <th v-for="column in columns" :key="column">{{ column }}</th>
+              <th v-if="hasDetailActions">操作</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(row, rowIndex) in rows" :key="rowKey(row, rowIndex)">
+            <tr
+              v-for="(row, rowIndex) in rows"
+              :key="rowKey(row, rowIndex)"
+              :data-record-id="detailRecordId(row) || undefined"
+            >
               <td v-for="column in columns" :key="column">
                 {{ formatValue(row[column]) }}
+              </td>
+              <td v-if="hasDetailActions" class="action-cell">
+                <button
+                  v-if="detailRecordId(row)"
+                  type="button"
+                  data-testid="view-detail"
+                  @click="emit('view-detail', detailRecordId(row)!)"
+                >
+                  查看详情
+                </button>
               </td>
             </tr>
           </tbody>
@@ -43,7 +58,14 @@ import { computed } from 'vue'
 
 type Row = Record<string, unknown>
 
-const props = defineProps<{ outputs: Record<string, unknown> }>()
+const props = withDefaults(
+  defineProps<{
+    outputs: Record<string, unknown>
+    allowDetails?: boolean
+  }>(),
+  { allowDetails: false },
+)
+const emit = defineEmits<{ 'view-detail': [recordId: string] }>()
 
 const rows = computed(() => findRecordArray(props.outputs))
 const columns = computed(() => {
@@ -55,6 +77,9 @@ const columns = computed(() => {
   }
   return result
 })
+const hasDetailActions = computed(
+  () => props.allowDetails && Boolean(rows.value?.some(detailRecordId)),
+)
 const rawOutput = computed(() => JSON.stringify(props.outputs, null, 2))
 
 function findRecordArray(root: unknown): Row[] | null {
@@ -95,6 +120,10 @@ function rowKey(row: Row, index: number): string {
   const identity = row.id ?? row.task_id ?? row.applyNo
   return identity === undefined ? String(index) : String(identity)
 }
+
+function detailRecordId(row: Row): string | null {
+  return typeof row.id === 'string' && row.id.trim() ? row.id : null
+}
 </script>
 
 <style scoped>
@@ -107,6 +136,7 @@ th, td { border-bottom: 1px solid var(--border); max-width: 260px; padding: 10px
 th { background: color-mix(in srgb, var(--surface) 88%, var(--ink)); color: var(--muted); font-size: 12px; font-weight: 700; position: sticky; top: 0; z-index: 1; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: color-mix(in srgb, var(--signal-soft) 52%, transparent); }
+.action-cell button { background: transparent; border: 1px solid var(--signal); border-radius: 6px; color: var(--signal); cursor: pointer; padding: 5px 9px; white-space: nowrap; }
 .empty-result { background: var(--signal-soft); border-radius: 8px; color: var(--muted); padding: 14px; }
 .object-result { display: grid; grid-template-columns: minmax(100px, auto) 1fr; margin: 0; }
 .object-result dt, .object-result dd { border-bottom: 1px solid var(--border); margin: 0; padding: 9px 6px; }

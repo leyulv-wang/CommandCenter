@@ -173,13 +173,24 @@ export interface ExtensionRecordingDetail extends RecordingSummary {
 
 export interface TaskRunView {
   run_id: string
+  parent_run_id?: string
   user_request: string
-  status: 'matching' | 'needs_object_selection' | 'executing' | 'verifying' | 'succeeded' | 'failed'
+  status:
+    | 'matching'
+    | 'needs_input'
+    | 'needs_object_selection'
+    | 'executing'
+    | 'verifying'
+    | 'succeeded'
+    | 'failed'
+  execution_mode?: 'tool' | 'skill'
   candidate_objects?: TaskItem[]
   final_response?: {
     summary: string
     outputs?: Record<string, unknown>
     observed_state?: Record<string, unknown>
+    tool_evidence?: Array<Record<string, unknown>>
+    verification?: Record<string, unknown>
   }
   errors?: string[]
 }

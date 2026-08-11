@@ -67,4 +67,40 @@ describe('TaskResultTable', () => {
     expect(wrapper.get('[data-testid="object-result"]').text()).toContain('success')
     expect(wrapper.get('[data-testid="object-result"]').text()).toContain('true')
   })
+
+  it('emits the selected saved record id when details are enabled', async () => {
+    const wrapper = mount(TaskResultTable, {
+      props: {
+        outputs: {
+          records: [
+            { id: 'row-1', applyNo: 'CGSQ01' },
+            { id: 'row-2', applyNo: 'CGSQ02' },
+          ],
+        },
+        allowDetails: true,
+      },
+    })
+
+    expect(wrapper.findAll('[data-testid="view-detail"]')).toHaveLength(2)
+    await wrapper
+      .get('[data-record-id="row-1"] [data-testid="view-detail"]')
+      .trigger('click')
+
+    expect(wrapper.emitted('view-detail')).toEqual([['row-1']])
+  })
+
+  it('does not offer details for id-less rows or object-only output', () => {
+    const rows = mount(TaskResultTable, {
+      props: {
+        outputs: { records: [{ applyNo: 'CGSQ01' }] },
+        allowDetails: true,
+      },
+    })
+    const object = mount(TaskResultTable, {
+      props: { outputs: { success: true }, allowDetails: true },
+    })
+
+    expect(rows.find('[data-testid="view-detail"]').exists()).toBe(false)
+    expect(object.find('[data-testid="view-detail"]').exists()).toBe(false)
+  })
 })
