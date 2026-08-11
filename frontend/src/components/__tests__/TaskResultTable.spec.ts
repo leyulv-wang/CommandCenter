@@ -68,6 +68,33 @@ describe('TaskResultTable', () => {
     expect(wrapper.get('[data-testid="object-result"]').text()).toContain('true')
   })
 
+  it('unwraps a main-record response instead of rendering one long JSON field', () => {
+    const wrapper = mount(TaskResultTable, {
+      props: {
+        outputs: {
+          query_purchase_apply_main: {
+            success: true,
+            message: '',
+            code: 200,
+            result: {
+              id: '2037430718812770305',
+              applyNo: 'CGSQ26032701',
+              applyBy: '孟明佳',
+              applyDate: '2026-03-27',
+            },
+          },
+        },
+      },
+    })
+
+    const labels = wrapper.findAll('[data-testid="object-result"] dt').map((item) => item.text())
+    expect(labels).toEqual(['id', 'applyNo', 'applyBy', 'applyDate'])
+    expect(wrapper.get('[data-testid="object-result"]').text()).toContain('CGSQ26032701')
+    expect(wrapper.get('[data-testid="object-result"]').text()).not.toContain(
+      'query_purchase_apply_main',
+    )
+  })
+
   it('emits the selected saved record id when details are enabled', async () => {
     const wrapper = mount(TaskResultTable, {
       props: {

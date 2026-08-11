@@ -40,7 +40,7 @@
     </template>
 
     <dl v-else data-testid="object-result" class="object-result">
-      <template v-for="(value, key) in outputs" :key="key">
+      <template v-for="(value, key) in displayObject" :key="key">
         <dt>{{ key }}</dt>
         <dd>{{ formatValue(value) }}</dd>
       </template>
@@ -68,6 +68,7 @@ const props = withDefaults(
 const emit = defineEmits<{ 'view-detail': [recordId: string] }>()
 
 const rows = computed(() => findRecordArray(props.outputs))
+const displayObject = computed(() => findDisplayObject(props.outputs))
 const columns = computed(() => {
   const result: string[] = []
   for (const row of rows.value || []) {
@@ -110,6 +111,23 @@ function isPlainObject(value: unknown): value is Row {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function findDisplayObject(root: unknown): Row {
+  let current: unknown = root
+  for (let depth = 0; depth <= 6 && isPlainObject(current); depth += 1) {
+    const entries = Object.entries(current)
+    if (entries.length === 1 && isPlainObject(entries[0][1])) {
+      current = entries[0][1]
+      continue
+    }
+    if (isPlainObject(current.result)) {
+      current = current.result
+      continue
+    }
+    return current
+  }
+  return isPlainObject(current) ? current : { value: current }
+}
+
 function formatValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—'
   if (typeof value === 'object') return JSON.stringify(value)
@@ -141,6 +159,7 @@ tbody tr:hover { background: color-mix(in srgb, var(--signal-soft) 52%, transpar
 .object-result { display: grid; grid-template-columns: minmax(100px, auto) 1fr; margin: 0; }
 .object-result dt, .object-result dd { border-bottom: 1px solid var(--border); margin: 0; padding: 9px 6px; }
 .object-result dt { color: var(--muted); font-family: var(--font-mono); }
+.object-result dd { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
 .raw-result { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px; }
 .raw-result summary { color: var(--muted); cursor: pointer; font-size: 13px; }
 .raw-result pre { background: var(--ink); border-radius: 8px; color: #dff7fa; font: 12px/1.55 var(--font-mono); max-height: 300px; overflow: auto; padding: 14px; white-space: pre-wrap; word-break: break-word; }
