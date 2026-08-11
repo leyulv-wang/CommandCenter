@@ -9,14 +9,36 @@ import httpx
 from langgraph.graph import END, START, StateGraph
 
 from app.command_center.schemas import (
+    DirectToolPlan,
+    DirectToolVerification,
     SkillDefinition,
+    StepResult,
     TaskMatchDecision,
     VerificationResult,
 )
+from app.command_center.direct_tool_runner import (
+    DirectToolRunResult,
+    DirectToolRunner,
+)
 from app.command_center.testing import SkillRunResult
+from app.command_center.tool_catalog import ToolDefinition
 
 
 class ExecutionAgents(Protocol):
+    def plan_tool_request(
+        self,
+        user_request: str,
+        task_context: dict[str, Any],
+        tools: list[ToolDefinition],
+    ) -> DirectToolPlan: ...
+
+    def verify_tool_result(
+        self,
+        user_request: str,
+        plan: DirectToolPlan,
+        step_results: list[StepResult],
+    ) -> DirectToolVerification: ...
+
     def match_request(
         self,
         user_request: str,
@@ -117,6 +139,8 @@ class ExecutionDependencies:
     business_reader: BusinessReader
     agents: ExecutionAgents
     runner: Runner
+    tools: Callable[[], list[ToolDefinition]] | None = None
+    direct_runner: DirectToolRunner | None = None
 
 
 class ExecutionState(TypedDict, total=False):
@@ -124,6 +148,11 @@ class ExecutionState(TypedDict, total=False):
     selected_object_id: str
     tasks: list[dict[str, Any]]
     skills: list[SkillDefinition]
+    tools: list[ToolDefinition]
+    tool_plan: DirectToolPlan
+    direct_run_result: DirectToolRunResult
+    tool_verification: DirectToolVerification
+    execution_mode: str
     match: TaskMatchDecision
     candidate_objects: list[dict[str, Any]]
     selected_object: dict[str, Any]
@@ -140,7 +169,77 @@ def build_execution_graph(dependencies: ExecutionDependencies):
         return {
             "tasks": dependencies.business_reader.search_tasks(state["user_request"]),
             "skills": dependencies.skills(),
+            "tools": dependencies.tools() if dependencies.tools is not None else [],
             "status": "matching",
+        }
+
+    def plan_direct_tool(state: ExecutionState) -> ExecutionState:
+        if not state["tools"] or dependencies.direct_runner is None:
+            return {"status": "skill_matching"}
+        task_context = state["tasks"][0] if state["tasks"] else {}
+        plan = dependencies.agents.plan_tool_request(
+            state["user_request"],
+            task_context,
+            state["tools"],
+        )
+        if plan.status == "not_applicable":
+            return {"tool_plan": plan, "status": "skill_matching"}
+        if plan.status == "needs_input":
+            return {
+                "tool_plan": plan,
+                "status": "needs_input",
+                "errors": [
+                    "完成任务还需要：" + "、".join(plan.missing_inputs)
+                ],
+            }
+        return {
+            "tool_plan": plan,
+            "execution_mode": "tool",
+            "status": "tool_ready",
+        }
+
+    def execute_direct_tool(state: ExecutionState) -> ExecutionState:
+        if dependencies.direct_runner is None:
+            return {"status": "failed", "errors": ["Tool 执行器不可用"]}
+        result = dependencies.direct_runner.run(
+            state["tool_plan"],
+            run_id=uuid4(),
+        )
+        if result.status != "succeeded":
+            return {
+                "direct_run_result": result,
+                "execution_mode": "tool",
+                "status": "failed",
+                "errors": ["Tool 执行失败"],
+                "final_response": {
+                    "summary": "Tool 执行失败",
+                    "outputs": result.outputs,
+                    "tool_evidence": result.evidence,
+                },
+            }
+        return {
+            "direct_run_result": result,
+            "execution_mode": "tool",
+            "status": "tool_verifying",
+        }
+
+    def verify_direct_tool(state: ExecutionState) -> ExecutionState:
+        verification = dependencies.agents.verify_tool_result(
+            state["user_request"],
+            state["tool_plan"],
+            state["direct_run_result"].step_results,
+        )
+        status = "succeeded" if verification.status == "passed" else "failed"
+        return {
+            "tool_verification": verification,
+            "execution_mode": "tool",
+            "status": status,
+            "final_response": {
+                "summary": verification.summary,
+                "outputs": state["direct_run_result"].outputs,
+                "tool_evidence": state["direct_run_result"].evidence,
+                "verification": verification.model_dump(mode="json"),
+            },
         }
 
     def match_request(state: ExecutionState) -> ExecutionState:
@@ -193,6 +292,7 @@ def build_execution_graph(dependencies: ExecutionDependencies):
             "candidate_objects": candidates,
             "selected_object": selected,
             "selected_skill": skill,
+            "execution_mode": "skill",
             "status": "ready",
         }
 
@@ -238,6 +338,7 @@ def build_execution_graph(dependencies: ExecutionDependencies):
         status = "succeeded" if verification.status == "passed" else "failed"
         return {
             "verification_result": verification,
+            "execution_mode": "skill",
             "status": status,
             "final_response": {
                 "summary": verification.summary,
@@ -248,11 +349,29 @@ def build_execution_graph(dependencies: ExecutionDependencies):
 
     graph = StateGraph(ExecutionState)
     graph.add_node("load_context", load_context)
+    graph.add_node("plan_direct_tool", plan_direct_tool)
+    graph.add_node("execute_direct_tool", execute_direct_tool)
+    graph.add_node("verify_direct_tool", verify_direct_tool)
     graph.add_node("match_request", match_request)
     graph.add_node("execute_skill", execute_skill)
     graph.add_node("verify_result", verify)
     graph.add_edge(START, "load_context")
-    graph.add_edge("load_context", "match_request")
+    graph.add_edge("load_context", "plan_direct_tool")
+    graph.add_conditional_edges(
+        "plan_direct_tool",
+        lambda state: state["status"],
+        {
+            "tool_ready": "execute_direct_tool",
+            "skill_matching": "match_request",
+            "needs_input": END,
+        },
+    )
+    graph.add_conditional_edges(
+        "execute_direct_tool",
+        lambda state: state["status"],
+        {"tool_verifying": "verify_direct_tool", "failed": END},
+    )
+    graph.add_edge("verify_direct_tool", END)
     graph.add_conditional_edges(
         "match_request",
         lambda state: state["status"],

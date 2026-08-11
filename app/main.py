@@ -19,6 +19,7 @@ from app.command_center.execution_graph import (
     build_execution_graph,
     executable_skill_set,
 )
+from app.command_center.direct_tool_runner import DirectToolRunner
 from app.command_center.learning_graph import LearningDependencies, build_learning_graph
 from app.command_center.credential_vault import EphemeralCredentialVault
 from app.command_center.system_connections import (
@@ -400,18 +401,40 @@ def build_command_center_components(
         )
 
     if execution_graph is None:
+        execution_executor = ToolExecutor(
+            execution_catalog,
+            client,
+            credential_provider=system_credential_store.headers_for,
+            credential_invalidator=system_credential_store.delete,
+        )
+
+        def executable_tools():
+            tools = []
+            for system_code in profiles:
+                try:
+                    tools.extend(
+                        tool
+                        for tool in catalogs.get(system_code).definitions()
+                        if tool.side_effect == "read"
+                    )
+                except (KeyError, ValueError, httpx.HTTPError) as exc:
+                    logger.warning(
+                        "System Tool catalog is unavailable for %s: %s",
+                        system_code,
+                        exc,
+                    )
+            return tools
+
         execution_graph = build_execution_graph(
             ExecutionDependencies(
                 skills=executable_skills,
                 business_reader=UserRequestReader(),
                 agents=agents,
-                runner=SkillRunner(
-                    ToolExecutor(
-                        execution_catalog,
-                        client,
-                        credential_provider=system_credential_store.headers_for,
-                        credential_invalidator=system_credential_store.delete,
-                    )
+                runner=SkillRunner(execution_executor),
+                tools=executable_tools,
+                direct_runner=DirectToolRunner(
+                    execution_catalog,
+                    execution_executor,
                 ),
             )
         )
