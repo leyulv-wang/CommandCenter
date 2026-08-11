@@ -7,6 +7,7 @@ from pydantic import TypeAdapter, ValidationError
 import app.command_center.schemas as schemas
 from app.command_center.schemas import (
     DemonstrationAnalysis,
+    DirectToolPlan,
     InputBinding,
     OperationTrace,
     SkillDefinition,
@@ -361,3 +362,39 @@ def test_binding_protocol_accepts_all_generic_sources(expression):
 def test_binding_protocol_rejects_non_path_expressions(expression):
     with pytest.raises(ValidationError):
         InputBinding(tool_field="body.value", expression=expression)
+
+
+def test_direct_tool_plan_rejects_matched_plan_without_steps():
+    with pytest.raises(ValidationError):
+        DirectToolPlan(status="matched", steps=[], summary="matched")
+
+
+def test_direct_tool_plan_allows_not_applicable_without_steps():
+    plan = DirectToolPlan(
+        status="not_applicable",
+        steps=[],
+        summary="use Skill",
+    )
+
+    assert plan.steps == []
+
+
+def test_direct_tool_plan_requires_missing_inputs_when_agent_needs_input():
+    with pytest.raises(ValidationError):
+        DirectToolPlan(status="needs_input", steps=[], summary="missing input")
+
+
+def test_direct_tool_plan_rejects_more_than_three_steps():
+    step = {
+        "step_id": "query",
+        "tool_id": "system:query",
+        "arguments": {"query": {}},
+        "reason": "read data",
+    }
+
+    with pytest.raises(ValidationError):
+        DirectToolPlan(
+            status="matched",
+            steps=[step, step, step, step],
+            summary="too many steps",
+        )

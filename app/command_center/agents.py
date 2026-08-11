@@ -20,13 +20,17 @@ from app.command_center.schemas import (
     APIAttributionAnalysis,
     BrowserSkillDefinition,
     DemonstrationAnalysis,
+    DirectToolPlan,
+    DirectToolVerification,
     FieldMappingAnalysis,
     SkillDefinition,
+    StepResult,
     TaskMatchDecision,
     TestPlan,
     TraceSegmentation,
     VerificationResult,
 )
+from app.command_center.tool_catalog import ToolDefinition
 
 
 logger = logging.getLogger(__name__)
@@ -248,6 +252,70 @@ class AgentSuite:
             },
         )
 
+    def plan_tool_request(
+        self,
+        user_request: str,
+        task_context: dict[str, Any],
+        tools: list[ToolDefinition],
+    ) -> DirectToolPlan:
+        tool_payload = [_compact_tool_definition(tool) for tool in tools]
+        runtime_request = RuntimeRequest(
+            role="direct_tool_planner",
+            instructions=(
+                "你是企业业务系统的只读 Tool 规划智能体。根据员工请求、可信业务上下文"
+                "和候选 Tool 的语义与参数，判断是否可直接完成任务。语义选择和参数提取"
+                "由你完成；只能逐字使用候选 tool_id 和候选声明的参数。若信息不足返回 "
+                "needs_input，若这些原子 Tool 不适用返回 not_applicable，以便系统继续尝试"
+                "已有 Skill。不要编造业务值，不要请求或输出凭据。每次最多规划三个步骤。"
+            ),
+            payload={
+                "user_request": user_request,
+                "task_context": task_context,
+                "tools": tool_payload,
+            },
+            output_schema=DirectToolPlan,
+            session_id=str(uuid4()),
+            limits=self.match_runtime.default_limits,
+        )
+        result = self.match_runtime.run_structured(runtime_request)
+        _validate_direct_tool_plan(result.output, tools)
+        logger.info(
+            "agent_runtime_completed trace_id=%s role=%s status=%s tool_steps=%s",
+            result.telemetry.trace_id,
+            result.telemetry.role,
+            result.output.status,
+            len(result.output.steps),
+        )
+        return result.output
+
+    def verify_tool_result(
+        self,
+        user_request: str,
+        plan: DirectToolPlan,
+        step_results: list[StepResult],
+    ) -> DirectToolVerification:
+        runtime_request = RuntimeRequest(
+            role="direct_tool_verifier",
+            instructions=(
+                "你是只读 Tool 执行结果验证智能体。结合员工原始请求、已批准的 Tool "
+                "计划和步骤结果，判断查询是否完成。HTTP 2xx 不能单独证明结果符合业务"
+                "请求；信息不足时返回 inconclusive。不要请求或输出凭据。"
+            ),
+            payload={
+                "user_request": user_request,
+                "plan": plan.model_dump(mode="json"),
+                "step_results": [
+                    step_result.model_dump(mode="json")
+                    for step_result in step_results
+                ],
+            },
+            output_schema=DirectToolVerification,
+            session_id=str(uuid4()),
+            limits=self.match_runtime.default_limits,
+        )
+        result = self.match_runtime.run_structured(runtime_request)
+        return result.output
+
     def match_request(
         self,
         user_request: str,
@@ -397,6 +465,52 @@ def _compact_skill_input(item: Any) -> dict[str, Any]:
         ),
         "required": bool(payload.get("required")),
     }
+
+
+def _compact_tool_definition(tool: ToolDefinition) -> dict[str, Any]:
+    return {
+        "tool_id": tool.tool_id,
+        "system_code": tool.system_code,
+        "description": tool.description,
+        "side_effect": tool.side_effect,
+        "parameters": [
+            {
+                "name": parameter.name,
+                "location": parameter.location,
+                "type": parameter.type,
+                "required": parameter.required,
+                "description": parameter.description,
+            }
+            for parameter in tool.parameters
+            if parameter.location in {"query", "path", "body"}
+        ],
+    }
+
+
+def _validate_direct_tool_plan(
+    plan: DirectToolPlan,
+    tools: list[ToolDefinition],
+) -> None:
+    candidates = {tool.tool_id: tool for tool in tools}
+    for step in plan.steps:
+        tool = candidates.get(step.tool_id)
+        if tool is None:
+            raise ValueError("agent plan references unknown Tool")
+        if tool.side_effect != "read":
+            raise ValueError("direct Tool plans are read-only")
+        declared: dict[str, set[str]] = {"query": set(), "path": set(), "body": set()}
+        for parameter in tool.parameters:
+            if parameter.location in declared:
+                declared[parameter.location].add(parameter.name)
+        body_properties = tool.body_schema.get("properties", {})
+        if isinstance(body_properties, dict):
+            declared["body"].update(str(name) for name in body_properties)
+        for location, arguments in step.arguments.items():
+            if location not in declared:
+                raise ValueError("agent plan uses an unsupported argument location")
+            unknown = set(arguments) - declared[location]
+            if unknown:
+                raise ValueError("agent plan references unknown parameter")
 
 
 def _as_payload(value: Any) -> dict[str, Any]:

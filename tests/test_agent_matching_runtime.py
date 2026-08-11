@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -15,7 +16,14 @@ from app.command_center.agent_runtime import (
     get_runtime_failure,
 )
 from app.command_center.agents import AgentSuite
-from app.command_center.schemas import SkillDefinition, TaskMatchDecision
+from app.command_center.schemas import (
+    DirectToolPlan,
+    DirectToolVerification,
+    SkillDefinition,
+    StepResult,
+    TaskMatchDecision,
+)
+from app.command_center.tool_catalog import ToolDefinition, ToolParameter
 from tests.test_command_center_schemas import valid_skill_payload
 
 
@@ -108,6 +116,170 @@ class OutputRuntime:
                 duration_ms=2.0,
             ),
         )
+
+
+def direct_tool(
+    *,
+    tool_id="yifeng_mes:queryPageListUsingGET_183",
+    side_effect="read",
+):
+    return ToolDefinition(
+        tool_id=tool_id,
+        system_code="yifeng_mes",
+        operation_id=tool_id.partition(":")[2],
+        method="GET",
+        base_url="https://mes.test",
+        path_template="/jeecg-boot/purchase/apply/list",
+        content_type=None,
+        description="查询采购申请列表",
+        side_effect=side_effect,
+        credential_header="X-Access-Token",
+        parameters=(
+            ToolParameter("applyBy", "query", "string", False, "请购人"),
+            ToolParameter("pageNo", "query", "integer", False, "页码"),
+            ToolParameter("pageSize", "query", "integer", False, "每页数量"),
+        ),
+    )
+
+
+def direct_plan_payload(**overrides):
+    payload = {
+        "status": "matched",
+        "steps": [
+            {
+                "step_id": "query",
+                "tool_id": "yifeng_mes:queryPageListUsingGET_183",
+                "arguments": {
+                    "query": {
+                        "applyBy": "孟明佳",
+                        "pageNo": 1,
+                        "pageSize": 10,
+                    }
+                },
+                "reason": "按请购人查询采购申请",
+            }
+        ],
+        "missing_inputs": [],
+        "summary": "查询采购申请",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_agent_plans_direct_tool_from_compact_candidate_definitions():
+    runtime = OutputRuntime(direct_plan_payload())
+    agents = AgentSuite(model=object(), match_runtime=runtime)
+
+    plan = agents.plan_tool_request(
+        "查询孟明佳的采购申请，第一页每页10条",
+        {"task_id": "user-request", "content": {}},
+        [direct_tool()],
+    )
+
+    assert isinstance(plan, DirectToolPlan)
+    assert plan.steps[0].tool_id == "yifeng_mes:queryPageListUsingGET_183"
+    assert plan.steps[0].arguments == {
+        "query": {"applyBy": "孟明佳", "pageNo": 1, "pageSize": 10}
+    }
+    request = runtime.requests[0]
+    assert request.role == "direct_tool_planner"
+    assert request.output_schema is DirectToolPlan
+    serialized_payload = str(request.payload).casefold()
+    assert "base_url" not in serialized_payload
+    assert "credential" not in serialized_payload
+    assert "x-access-token" not in serialized_payload
+    assert "response" not in serialized_payload
+    assert "skills" not in request.payload
+
+
+@pytest.mark.parametrize(
+    ("tools", "plan", "message"),
+    [
+        (
+            [direct_tool()],
+            direct_plan_payload(
+                steps=[
+                    {
+                        **direct_plan_payload()["steps"][0],
+                        "tool_id": "yifeng_mes:not-allowed",
+                    }
+                ]
+            ),
+            "unknown Tool",
+        ),
+        (
+            [direct_tool(side_effect="write")],
+            direct_plan_payload(),
+            "read-only",
+        ),
+        (
+            [direct_tool()],
+            direct_plan_payload(
+                steps=[
+                    {
+                        **direct_plan_payload()["steps"][0],
+                        "arguments": {"query": {"unknown": "value"}},
+                    }
+                ]
+            ),
+            "unknown parameter",
+        ),
+        (
+            [direct_tool()],
+            direct_plan_payload(
+                steps=[
+                    {
+                        **direct_plan_payload()["steps"][0],
+                        "arguments": {"header": {"X-Access-Token": "secret"}},
+                    }
+                ]
+            ),
+            "Input should be 'query', 'path' or 'body'",
+        ),
+    ],
+)
+def test_agent_direct_tool_plan_enforces_deterministic_boundaries(
+    tools, plan, message
+):
+    runtime = OutputRuntime(plan)
+
+    with pytest.raises(ValueError, match=message):
+        AgentSuite(model=object(), match_runtime=runtime).plan_tool_request(
+            "查询采购申请",
+            {"task_id": "user-request", "content": {}},
+            tools,
+        )
+
+
+def test_agent_verifies_direct_tool_result_with_structured_runtime():
+    runtime = OutputRuntime(
+        {
+            "status": "passed",
+            "summary": "采购申请列表与请求一致",
+        }
+    )
+    plan = DirectToolPlan.model_validate(direct_plan_payload())
+    now = datetime.now(UTC)
+    step_result = StepResult(
+        run_id=uuid4(),
+        step_id="query",
+        tool_id=plan.steps[0].tool_id,
+        status="succeeded",
+        started_at=now,
+        ended_at=now,
+        normalized_output={"result": {"records": []}},
+    )
+
+    verification = AgentSuite(
+        model=object(), match_runtime=runtime
+    ).verify_tool_result("查询采购申请", plan, [step_result])
+
+    assert verification == DirectToolVerification(
+        status="passed",
+        summary="采购申请列表与请求一致",
+    )
+    assert runtime.requests[0].role == "direct_tool_verifier"
+    assert runtime.requests[0].output_schema is DirectToolVerification
 
 
 def decision_payload(skill_id, task_id="TASK-1"):

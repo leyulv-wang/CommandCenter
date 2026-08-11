@@ -520,10 +520,49 @@ class TestPlan(BaseModel):
     cases: list[TestCase]
 
 
+class DirectToolStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str = Field(min_length=1, max_length=128)
+    tool_id: str = Field(min_length=1, max_length=256)
+    arguments: dict[Literal["query", "path", "body"], dict[str, Any]] = Field(
+        default_factory=dict
+    )
+    reason: str = Field(min_length=1, max_length=1_000)
+
+
+class DirectToolPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["matched", "not_applicable", "needs_input"]
+    steps: list[DirectToolStep] = Field(default_factory=list, max_length=3)
+    missing_inputs: list[str] = Field(default_factory=list)
+    summary: str = Field(min_length=1, max_length=2_000)
+
+    @model_validator(mode="after")
+    def require_status_consistent_payload(self) -> DirectToolPlan:
+        if self.status == "matched" and not self.steps:
+            raise ValueError("matched direct Tool plans require at least one step")
+        if self.status != "matched" and self.steps:
+            raise ValueError("only matched direct Tool plans may contain steps")
+        if self.status == "needs_input" and not self.missing_inputs:
+            raise ValueError("needs_input plans must identify missing inputs")
+        if self.status != "needs_input" and self.missing_inputs:
+            raise ValueError("missing_inputs is only valid for needs_input plans")
+        return self
+
+
+class DirectToolVerification(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["passed", "failed", "inconclusive"]
+    summary: str = Field(min_length=1, max_length=2_000)
+
+
 class ExecutionCommand(BaseModel):
     run_id: UUID
-    skill_id: UUID
-    skill_version: int
+    skill_id: UUID | None = None
+    skill_version: int | None = None
     step_id: str
     tool_id: str
     arguments: dict[str, Any]
