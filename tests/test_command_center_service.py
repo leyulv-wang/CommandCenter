@@ -285,6 +285,40 @@ def test_service_rejects_detail_record_not_present_in_saved_result(tmp_path):
         service.create_task_detail_run(parent_run_id, "row-other")
 
 
+def test_direct_tool_and_detail_runs_do_not_persist_skills(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    execution = Graph(
+        {
+            "status": "succeeded",
+            "execution_mode": "tool",
+            "final_response": {
+                "summary": "只读查询完成",
+                "outputs": {
+                    "query": {"result": {"records": [{"id": "row-1"}]}}
+                },
+            },
+        }
+    )
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=execution,
+    )
+    before = (
+        repository.list_published_skills(),
+        repository.list_verified_candidates(),
+    )
+
+    parent = service.create_task_run(CreateTaskRunRequest(user_request="查询采购申请"))
+    service.create_task_detail_run(parent["run_id"], "row-1")
+
+    assert (
+        repository.list_published_skills(),
+        repository.list_verified_candidates(),
+    ) == before
+
+
 def test_service_persists_safe_extension_upload_failure(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
     extension = AbortableExtension()
