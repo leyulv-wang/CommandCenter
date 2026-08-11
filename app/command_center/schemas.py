@@ -559,6 +559,54 @@ class DirectToolVerification(BaseModel):
     summary: str = Field(min_length=1, max_length=2_000)
 
 
+class PurchaseTrackingScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    goal: str = Field(min_length=1, max_length=500)
+    application: dict[str, Any]
+    application_id: str = Field(min_length=1, max_length=128)
+    application_number: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def require_trusted_application_identity(self) -> PurchaseTrackingScope:
+        if (
+            str(self.application.get("id", "")) != self.application_id
+            or str(self.application.get("applyNo", ""))
+            != self.application_number
+        ):
+            raise ValueError("identity must match the trusted application record")
+        return self
+
+
+class PurchaseTrackingDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["complete", "business_pending", "incomplete", "failed"]
+    summary: str = Field(min_length=1, max_length=2_000)
+    evidence_step_ids: list[str] = Field(default_factory=list, max_length=16)
+
+
+class PurchaseProgressStage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stage: Literal["application", "order", "receiving", "warehouse"]
+    status: Literal[
+        "completed", "in_progress", "pending", "not_found", "failed"
+    ]
+    summary: str = Field(min_length=1, max_length=2_000)
+    record_count: int = Field(ge=0)
+    records: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
+    evidence_step_ids: list[str] = Field(default_factory=list, max_length=16)
+
+
+class PurchaseProgressResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["complete", "business_pending", "incomplete", "failed"]
+    summary: str = Field(min_length=1, max_length=2_000)
+    stages: list[PurchaseProgressStage] = Field(min_length=1, max_length=4)
+
+
 class ExecutionCommand(BaseModel):
     run_id: UUID
     skill_id: UUID | None = None

@@ -222,6 +222,30 @@ class RoutingToolCatalog:
         )
 
 
+def validate_tool_arguments(
+    tool: ToolDefinition,
+    arguments: dict[str, Any],
+    *,
+    require_read: bool = True,
+) -> None:
+    if require_read and tool.side_effect != "read":
+        raise ValueError("Tool execution is read-only")
+
+    declared: dict[str, set[str]] = {"query": set(), "path": set(), "body": set()}
+    for parameter in tool.parameters:
+        if parameter.location in declared:
+            declared[parameter.location].add(parameter.name)
+    body_properties = tool.body_schema.get("properties", {})
+    if isinstance(body_properties, dict):
+        declared["body"].update(str(name) for name in body_properties)
+
+    for location, values in arguments.items():
+        if location not in declared or not isinstance(values, dict):
+            raise ValueError("unsupported Tool argument location")
+        if set(values) - declared[location]:
+            raise ValueError("Tool arguments reference an unknown parameter")
+
+
 def _tool_from_operation(
     *,
     document: dict[str, Any],

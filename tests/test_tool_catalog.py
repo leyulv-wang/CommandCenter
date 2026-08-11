@@ -1,7 +1,12 @@
 import pytest
 
 from app.command_center.system_profiles import SystemProfile
-from app.command_center.tool_catalog import ToolCatalog
+from app.command_center.tool_catalog import (
+    ToolCatalog,
+    ToolDefinition,
+    ToolParameter,
+    validate_tool_arguments,
+)
 
 
 def profile_for(
@@ -31,6 +36,44 @@ def profile_for(
             ],
         }
     )
+
+
+def parameterized_tool(*, side_effect: str = "read") -> ToolDefinition:
+    return ToolDefinition(
+        tool_id="yifeng_mes:purchase_orders",
+        system_code="yifeng_mes",
+        operation_id="purchase_orders",
+        method="GET",
+        base_url="http://mes.example.test",
+        path_template="/jeecg-boot/purchase/orders",
+        content_type=None,
+        side_effect=side_effect,
+        parameters=(
+            ToolParameter(
+                name="sourceCode",
+                location="query",
+                type="string",
+                required=False,
+                description="采购申请来源单号",
+            ),
+        ),
+    )
+
+
+def test_validate_tool_arguments_rejects_unknown_query_parameter():
+    with pytest.raises(ValueError, match="unknown parameter"):
+        validate_tool_arguments(
+            parameterized_tool(),
+            {"query": {"madeUp": "CGSQ01"}},
+        )
+
+
+def test_validate_tool_arguments_rejects_non_read_tool():
+    with pytest.raises(ValueError, match="read-only"):
+        validate_tool_arguments(
+            parameterized_tool(side_effect="write"),
+            {"query": {"sourceCode": "CGSQ01"}},
+        )
 
 
 def test_swagger2_query_parameters_enter_allowlisted_tool():

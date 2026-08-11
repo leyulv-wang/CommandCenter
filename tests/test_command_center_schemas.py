@@ -10,6 +10,8 @@ from app.command_center.schemas import (
     DirectToolPlan,
     InputBinding,
     OperationTrace,
+    PurchaseProgressResult,
+    PurchaseTrackingScope,
     SkillDefinition,
 )
 
@@ -45,6 +47,49 @@ def valid_skill_payload() -> dict[str, object]:
         ],
         "success_conditions": [],
     }
+
+
+def test_purchase_progress_result_preserves_multiple_records_per_stage():
+    result = PurchaseProgressResult.model_validate(
+        {
+            "status": "complete",
+            "summary": "采购申请已生成订单并完成收货",
+            "stages": [
+                {
+                    "stage": "receiving",
+                    "status": "completed",
+                    "summary": "找到 2 条收货记录",
+                    "record_count": 2,
+                    "records": [
+                        {"orderNumber": "CGDD01", "receiptNo": "SH01"},
+                        {"orderNumber": "CGDD01", "receiptNo": "SH02"},
+                    ],
+                    "evidence_step_ids": ["receiving_1"],
+                }
+            ],
+        }
+    )
+
+    assert result.stages[0].record_count == 2
+    assert [item["receiptNo"] for item in result.stages[0].records] == [
+        "SH01",
+        "SH02",
+    ]
+
+
+def test_purchase_tracking_scope_rejects_identity_not_present_in_trusted_record():
+    with pytest.raises(ValidationError, match="trusted application"):
+        PurchaseTrackingScope.model_validate(
+            {
+                "goal": "追踪采购申请进度",
+                "application": {
+                    "id": "application-1",
+                    "applyNo": "CGSQ01",
+                },
+                "application_id": "application-2",
+                "application_number": "CGSQ01",
+            }
+        )
 
 
 def existing_trace_payload() -> dict[str, object]:

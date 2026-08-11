@@ -30,7 +30,7 @@ from app.command_center.schemas import (
     TraceSegmentation,
     VerificationResult,
 )
-from app.command_center.tool_catalog import ToolDefinition
+from app.command_center.tool_catalog import ToolDefinition, validate_tool_arguments
 
 
 logger = logging.getLogger(__name__)
@@ -496,21 +496,7 @@ def _validate_direct_tool_plan(
         tool = candidates.get(step.tool_id)
         if tool is None:
             raise ValueError("agent plan references unknown Tool")
-        if tool.side_effect != "read":
-            raise ValueError("direct Tool plans are read-only")
-        declared: dict[str, set[str]] = {"query": set(), "path": set(), "body": set()}
-        for parameter in tool.parameters:
-            if parameter.location in declared:
-                declared[parameter.location].add(parameter.name)
-        body_properties = tool.body_schema.get("properties", {})
-        if isinstance(body_properties, dict):
-            declared["body"].update(str(name) for name in body_properties)
-        for location, arguments in step.arguments.items():
-            if location not in declared:
-                raise ValueError("agent plan uses an unsupported argument location")
-            unknown = set(arguments) - declared[location]
-            if unknown:
-                raise ValueError("agent plan references unknown parameter")
+        validate_tool_arguments(tool, step.arguments)
 
 
 def _as_payload(value: Any) -> dict[str, Any]:
