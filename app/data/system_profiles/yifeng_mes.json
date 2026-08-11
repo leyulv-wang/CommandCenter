@@ -34,6 +34,31 @@
       "method": "GET",
       "path": "/jeecg-boot/purchase/apply/queryPurchaseApplyDetailByMainId",
       "side_effect": "read"
+    },
+    {
+      "method": "GET",
+      "path": "/jeecg-boot/jiafang.purchase.order/order/list",
+      "side_effect": "read"
+    },
+    {
+      "method": "GET",
+      "path": "/jeecg-boot/jiafang.purchase.order/order/listOrderDetailByMainId",
+      "side_effect": "read"
+    },
+    {
+      "method": "GET",
+      "path": "/jeecg-boot/jiafang.purchase.order/order/receivingRecords",
+      "side_effect": "read"
+    },
+    {
+      "method": "GET",
+      "path": "/jeecg-boot/jiafang.purchase.warehouse/purchaseWarehouse/list",
+      "side_effect": "read"
+    },
+    {
+      "method": "GET",
+      "path": "/jeecg-boot/jiafang.purchase.warehouse/purchaseWarehouse/listPurchaseWarehouseDetailByMainId",
+      "side_effect": "read"
     }
   ]
 }

@@ -353,3 +353,65 @@ def test_catalog_matches_templated_task_path():
 
     assert matched is not None
     assert matched.path_parameters == {"task_id": "OFFICE-TASK-0001"}
+
+
+def test_purchase_tracking_catalog_preserves_cross_object_query_parameters():
+    paths = {
+        "/jeecg-boot/jiafang.purchase.order/order/list": (
+            "queryPageListUsingGET_124",
+            ["sourceCode", "pageNo", "pageSize"],
+        ),
+        "/jeecg-boot/jiafang.purchase.order/order/listOrderDetailByMainId": (
+            "listOrderDetailByMainIdUsingGET",
+            ["mainCode", "pageNo", "pageSize"],
+        ),
+        "/jeecg-boot/jiafang.purchase.order/order/receivingRecords": (
+            "receivingRecordsUsingGET_1",
+            ["orderNumber", "pageNo", "pageSize"],
+        ),
+        "/jeecg-boot/jiafang.purchase.warehouse/purchaseWarehouse/list": (
+            "queryPageListUsingGET_185",
+            ["purchaseOrder", "sourceCode", "pageNo", "pageSize"],
+        ),
+        "/jeecg-boot/jiafang.purchase.warehouse/purchaseWarehouse/listPurchaseWarehouseDetailByMainId": (
+            "listPurchaseWarehouseDetailByMainIdUsingGET",
+            ["mainCode", "pageNo", "pageSize"],
+        ),
+    }
+    profile = SystemProfile.model_validate(
+        {
+            **profile_for("GET", next(iter(paths)), side_effect="read").model_dump(),
+            "tool_permissions": [
+                {"method": "GET", "path": path, "side_effect": "read"}
+                for path in paths
+            ],
+        }
+    )
+    document = {
+        "swagger": "2.0",
+        "paths": {
+            path: {
+                "get": {
+                    "operationId": operation_id,
+                    "summary": operation_id,
+                    "parameters": [
+                        {
+                            "name": name,
+                            "in": "query",
+                            "type": "integer" if name in {"pageNo", "pageSize"} else "string",
+                            "required": False,
+                        }
+                        for name in parameter_names
+                    ],
+                }
+            }
+            for path, (operation_id, parameter_names) in paths.items()
+        },
+    }
+
+    catalog = ToolCatalog.from_system_profile(document, profile)
+
+    for operation_id, parameter_names in paths.values():
+        tool = catalog.get(f"yifeng_mes:{operation_id}")
+        assert set(tool.query_parameters) == set(parameter_names)
+        assert tool.side_effect == "read"

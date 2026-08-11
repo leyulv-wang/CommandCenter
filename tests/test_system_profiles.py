@@ -33,7 +33,7 @@ def valid_profile_payload() -> dict[str, object]:
     }
 
 
-def test_yifeng_profile_only_allows_three_read_operations():
+def test_yifeng_profile_allows_only_verified_purchase_tracking_reads():
     profile = load_system_profile(Path("app/data/system_profiles/yifeng_mes.json"))
 
     assert profile.system_code == "yifeng_mes"
@@ -52,8 +52,39 @@ def test_yifeng_profile_only_allows_three_read_operations():
             "/jeecg-boot/purchase/apply/queryPurchaseApplyDetailByMainId",
             "read",
         ),
+        (
+            "GET",
+            "/jeecg-boot/jiafang.purchase.order/order/list",
+            "read",
+        ),
+        (
+            "GET",
+            "/jeecg-boot/jiafang.purchase.order/order/listOrderDetailByMainId",
+            "read",
+        ),
+        (
+            "GET",
+            "/jeecg-boot/jiafang.purchase.order/order/receivingRecords",
+            "read",
+        ),
+        (
+            "GET",
+            "/jeecg-boot/jiafang.purchase.warehouse/purchaseWarehouse/list",
+            "read",
+        ),
+        (
+            "GET",
+            "/jeecg-boot/jiafang.purchase.warehouse/purchaseWarehouse/listPurchaseWarehouseDetailByMainId",
+            "read",
+        ),
     }
     assert profile.permission_for("GET", "/jeecg-boot/purchase/apply/audit") is None
+    assert profile.permission_for(
+        "GET", "/jeecg-boot/jiafang.purchase.order/order/audit"
+    ) is None
+    assert profile.permission_for(
+        "GET", "/jeecg-boot/jiafang.purchase.order/order/complete"
+    ) is None
     assert profile.permission_for("POST", "/jeecg-boot/purchase/apply/add") is None
     assert any(
         re.search(pattern, "captchaCode")
