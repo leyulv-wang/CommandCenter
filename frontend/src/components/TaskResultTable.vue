@@ -39,6 +39,14 @@
                 >
                   追踪采购进度
                 </button>
+                <button
+                  v-if="followUpRecordId(row)"
+                  type="button"
+                  data-testid="create-follow-up"
+                  @click="emit('create-follow-up', followUpRecordId(row)!)"
+                >
+                  创建采购跟进任务
+                </button>
               </td>
             </tr>
           </tbody>
@@ -71,12 +79,14 @@ const props = withDefaults(
     outputs: Record<string, unknown>
     allowDetails?: boolean
     allowProgress?: boolean
+    allowFollowUp?: boolean
   }>(),
-  { allowDetails: false, allowProgress: false },
+  { allowDetails: false, allowProgress: false, allowFollowUp: false },
 )
 const emit = defineEmits<{
   'view-detail': [recordId: string]
   'track-progress': [recordId: string]
+  'create-follow-up': [recordId: string]
 }>()
 
 const rows = computed(() => findRecordArray(props.outputs))
@@ -96,7 +106,12 @@ const hasDetailActions = computed(
 const hasProgressActions = computed(
   () => props.allowProgress && Boolean(rows.value?.some(progressRecordId)),
 )
-const hasRowActions = computed(() => hasDetailActions.value || hasProgressActions.value)
+const hasFollowUpActions = computed(
+  () => props.allowFollowUp && Boolean(rows.value?.some(followUpRecordId)),
+)
+const hasRowActions = computed(
+  () => hasDetailActions.value || hasProgressActions.value || hasFollowUpActions.value,
+)
 const rawOutput = computed(() => JSON.stringify(props.outputs, null, 2))
 
 function findRecordArray(root: unknown): Row[] | null {
@@ -164,6 +179,10 @@ function progressRecordId(row: Row): string | null {
   return recordId && typeof row.applyNo === 'string' && row.applyNo.trim()
     ? recordId
     : null
+}
+
+function followUpRecordId(row: Row): string | null {
+  return progressRecordId(row)
 }
 </script>
 

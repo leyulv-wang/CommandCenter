@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   createTaskRun: vi.fn(),
   createTaskDetailRun: vi.fn(),
   createPurchaseProgressRun: vi.fn(),
+  createPurchaseFollowUpRun: vi.fn(),
   selectTaskObject: vi.fn(),
 }))
 
@@ -66,6 +67,16 @@ describe('NaturalLanguageTaskPanel', () => {
             },
           ],
         },
+      },
+    })
+    api.createPurchaseFollowUpRun.mockReset().mockResolvedValue({
+      run_id: 'follow-up-1',
+      parent_run_id: 'run-1',
+      selected_record_id: 'A-1',
+      status: 'succeeded',
+      final_response: {
+        summary: '已在采购业务系统创建跟进任务',
+        outputs: { create: { follow_up_id: 'FOLLOW-UP-0001', mes_apply_no: 'CGSQ01' } },
       },
     })
   })
@@ -167,5 +178,19 @@ describe('NaturalLanguageTaskPanel', () => {
       '追踪服务暂不可用',
     )
     expect(wrapper.get('table').text()).toContain('CGSQ01')
+  })
+
+  it('creates a cross-system follow-up from the trusted selected row', async () => {
+    const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
+    await wrapper.get('textarea').setValue('查询采购申请列表')
+    await wrapper.get('.command-input button').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="create-follow-up"]').trigger('click')
+    await flushPromises()
+
+    expect(api.createPurchaseFollowUpRun).toHaveBeenCalledWith('run-1', 'A-1')
+    expect(wrapper.text()).toContain('已在采购业务系统创建跟进任务')
+    expect(wrapper.text()).toContain('FOLLOW-UP-0001')
   })
 })

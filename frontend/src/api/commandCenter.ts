@@ -59,6 +59,17 @@ export function createPurchaseProgressRun(parentRunId: string, recordId: string)
   })
 }
 
+export function createPurchaseFollowUpRun(
+  parentRunId: string,
+  recordId: string,
+  instruction = '为这条采购申请创建采购跟进任务',
+) {
+  return request<TaskRunView>(`/task-runs/${parentRunId}/purchase-follow-up`, {
+    method: 'POST',
+    body: JSON.stringify({ record_id: recordId, instruction }),
+  })
+}
+
 export function selectTaskObject(runId: string, objectId: string) {
   return request<TaskRunView>(`/task-runs/${runId}/select-object`, {
     method: 'POST',

@@ -71,6 +71,13 @@ class CreatePurchaseProgressRequest(BaseModel):
     record_id: str = Field(min_length=1, max_length=128)
 
 
+class CreatePurchaseFollowUpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    record_id: str = Field(min_length=1, max_length=128)
+    instruction: str = Field(min_length=1, max_length=500)
+
+
 class SelectObjectRequest(BaseModel):
     object_id: str
 
@@ -394,6 +401,24 @@ def create_router(service_provider: Callable[[], Any]) -> APIRouter:
                 status_code=404,
                 detail="task run record not found",
             ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post(
+        "/task-runs/{run_id}/purchase-follow-up",
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_purchase_follow_up_run(
+        run_id: UUID,
+        request: CreatePurchaseFollowUpRequest,
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.create_purchase_follow_up_run(
+                run_id, request.record_id, request.instruction
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="task run record not found") from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

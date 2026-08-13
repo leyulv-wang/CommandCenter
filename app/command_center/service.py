@@ -747,6 +747,39 @@ class CommandCenterService:
         self.repository.save_task_run(progress_run_id, payload)
         return payload
 
+    def create_purchase_follow_up_run(
+        self,
+        run_id: UUID | str,
+        record_id: str,
+        instruction: str,
+    ) -> dict[str, Any]:
+        parent_run_id = UUID(str(run_id))
+        parent = self.repository.get_task_run(parent_run_id)
+        outputs = parent.get("final_response", {}).get("outputs")
+        selected_record = _find_record_by_id(outputs, record_id)
+        if selected_record is None:
+            raise KeyError("record is not present in the saved task result")
+
+        follow_up_run_id = uuid4()
+        result = self.execution_graph.invoke(
+            {
+                "user_request": instruction,
+                "task_context": {
+                    "selected_record": selected_record,
+                    "requested_capability": "purchase_follow_up",
+                },
+            }
+        )
+        payload = {
+            "run_id": str(follow_up_run_id),
+            "parent_run_id": str(parent_run_id),
+            "selected_record_id": record_id,
+            "user_request": instruction,
+            **jsonable_encoder(result),
+        }
+        self.repository.save_task_run(follow_up_run_id, payload)
+        return payload
+
     def get_task_run(self, run_id: UUID | str) -> dict[str, Any]:
         return self.repository.get_task_run(UUID(str(run_id)))
 

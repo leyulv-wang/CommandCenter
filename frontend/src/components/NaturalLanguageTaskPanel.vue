@@ -29,8 +29,10 @@
         :outputs="run.final_response.outputs"
         :allow-details="canViewDetails"
         :allow-progress="canTrackProgress"
+        :allow-follow-up="canCreateFollowUp"
         @view-detail="viewDetails"
         @track-progress="trackProgress"
+        @create-follow-up="createFollowUp"
       />
 
       <div v-if="run.status === 'needs_object_selection'" class="object-choice">
@@ -76,6 +78,19 @@
         :progress="progressRun.final_response.progress"
       />
     </section>
+
+    <section v-if="followUpRunning || followUpRun || followUpError" class="detail-state">
+      <h3>跨系统采购跟进</h3>
+      <p v-if="followUpRunning">正在创建采购跟进任务…</p>
+      <p v-if="followUpError" class="run-error">{{ followUpError }}</p>
+      <template v-if="followUpRun?.final_response">
+        <p>{{ followUpRun.final_response.summary }}</p>
+        <TaskResultTable
+          v-if="followUpRun.final_response.outputs"
+          :outputs="followUpRun.final_response.outputs"
+        />
+      </template>
+    </section>
   </section>
 </template>
 
@@ -84,6 +99,7 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   createPurchaseProgressRun,
+  createPurchaseFollowUpRun,
   createTaskDetailRun,
   createTaskRun,
   selectTaskObject,
@@ -101,11 +117,17 @@ const detailError = ref('')
 const progressRunning = ref(false)
 const progressRun = ref<TaskRunView | null>(null)
 const progressError = ref('')
+const followUpRunning = ref(false)
+const followUpRun = ref<TaskRunView | null>(null)
+const followUpError = ref('')
 const terminal = computed(() => ['succeeded', 'failed'].includes(run.value?.status || ''))
 const canViewDetails = computed(
   () => run.value?.status === 'succeeded' && run.value.execution_mode === 'tool',
 )
 const canTrackProgress = computed(
+  () => run.value?.status === 'succeeded' && run.value.execution_mode === 'tool',
+)
+const canCreateFollowUp = computed(
   () => run.value?.status === 'succeeded' && run.value.execution_mode === 'tool',
 )
 const statusLabel = computed(() => ({
@@ -164,6 +186,21 @@ async function viewDetails(recordId: string) {
     ElMessage.error(detailError.value)
   } finally {
     detailRunning.value = false
+  }
+}
+
+async function createFollowUp(recordId: string) {
+  if (!run.value) return
+  followUpRunning.value = true
+  followUpRun.value = null
+  followUpError.value = ''
+  try {
+    followUpRun.value = await createPurchaseFollowUpRun(run.value.run_id, recordId)
+  } catch (error) {
+    followUpError.value = error instanceof Error ? error.message : '采购跟进任务创建失败'
+    ElMessage.error(followUpError.value)
+  } finally {
+    followUpRunning.value = false
   }
 }
 

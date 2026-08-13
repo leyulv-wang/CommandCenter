@@ -310,6 +310,25 @@ def test_purchase_progress_endpoint_maps_missing_saved_record_to_404():
     )
 
     assert response.status_code == 404
+
+
+def test_purchase_follow_up_endpoint_uses_only_record_id_and_instruction():
+    parent_run_id = uuid4()
+    service = FakeCommandCenterService()
+    service.create_purchase_follow_up_run = lambda run_id, record_id, instruction: {
+        "run_id": str(uuid4()),
+        "parent_run_id": str(run_id),
+        "selected_record_id": record_id,
+        "user_request": instruction,
+        "status": "succeeded",
+    }
+    response = client_for(service).post(
+        f"/task-runs/{parent_run_id}/purchase-follow-up",
+        json={"record_id": "row-1", "instruction": "为这条申请创建采购跟进任务"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["selected_record_id"] == "row-1"
     assert "not-saved" not in response.text
 
 

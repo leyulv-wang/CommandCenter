@@ -258,7 +258,8 @@ def test_service_creates_persisted_detail_run_from_saved_list_record(tmp_path):
     repository.save_task_run(
         parent_run_id,
         {
-            "run_id": str(parent_run_id),
+                "run_id": str(parent_run_id),
+                "status": "succeeded",
             "user_request": "查询采购申请列表",
             "status": "succeeded",
             "final_response": {
@@ -385,6 +386,49 @@ def test_service_creates_purchase_progress_run_from_saved_record(tmp_path):
     assert progress["parent_run_id"] == str(parent_run_id)
     assert progress["run_id"] != str(parent_run_id)
     assert repository.get_task_run(progress["run_id"])["status"] == "succeeded"
+
+
+def test_service_creates_purchase_follow_up_from_trusted_saved_record(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    execution = Graph({"status": "succeeded", "final_response": {"summary": "已创建跟进任务"}})
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=execution,
+    )
+    parent_run_id = uuid4()
+    repository.save_task_run(
+        parent_run_id,
+        {
+            "run_id": str(parent_run_id),
+            "status": "succeeded",
+            "user_request": "查询采购申请",
+            "final_response": {"outputs": {"query": {"records": [{"id": "row-1", "applyNo": "CGSQ01"}]}}},
+        },
+    )
+
+    result = service.create_purchase_follow_up_run(
+        parent_run_id, "row-1", "为这条申请创建采购跟进任务"
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["selected_record_id"] == "row-1"
+    assert execution.state["task_context"]["selected_record"]["applyNo"] == "CGSQ01"
+
+
+def test_service_rejects_purchase_follow_up_record_not_in_parent_output(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    service = CommandCenterService(
+        repository=repository, recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+    )
+    parent_run_id = uuid4()
+    repository.save_task_run(parent_run_id, {"run_id": str(parent_run_id), "status": "succeeded", "final_response": {"outputs": []}})
+
+    with pytest.raises(KeyError, match="saved task result"):
+        service.create_purchase_follow_up_run(parent_run_id, "forged", "创建跟进任务")
 
 
 def test_service_rejects_progress_record_not_present_in_saved_result(tmp_path):
