@@ -17,6 +17,8 @@ export type CommandCenterPageDescriptor = {
 };
 
 export type CommandCenterBrowserEvent = {
+  system_code?: string;
+  tab_id?: number;
   event_id: string;
   client_sequence: number;
   occurred_at: string;
@@ -32,6 +34,8 @@ export type CommandCenterBrowserEvent = {
 };
 
 export type CommandCenterNetworkExchange = {
+  system_code?: string;
+  tab_id?: number;
   exchange_id: string;
   client_sequence: number;
   started_at: string;
@@ -47,6 +51,8 @@ export type CommandCenterNetworkExchange = {
 };
 
 export type CommandCenterPageMutation = {
+  system_code?: string;
+  tab_id?: number;
   mutation_id: string;
   client_sequence: number;
   occurred_at: string;
@@ -101,6 +107,7 @@ const SENSITIVE_TEXT = /authorization|cookie|credential|token|api\s*key|password
 
 export function createEvidenceConverter(options: {
   allowedOrigins: string[];
+  originSystemCodes?: Record<string, string>;
   fingerprintKey: string;
   maxBufferedEvents?: number;
 }): EvidenceConverter {
@@ -175,10 +182,19 @@ export function createEvidenceConverter(options: {
       let redactedFieldCount = 0;
 
       for (const item of current) {
+        const sourceEvent = item.kind === 'exchange' ? item.request : item.event;
+        const origin = safeUrl(
+          item.kind === 'exchange' ? item.request.full_url : sourceEvent.url,
+        )?.origin;
+        const identity = origin ? options.originSystemCodes?.[origin] : undefined;
+        const metadata = {
+          ...(identity ? { system_code: identity } : {}),
+          tab_id: sourceEvent.tab_id,
+        };
         if (item.kind === 'action') {
           const converted = await convertAction(item.event, item.sequence, options.fingerprintKey);
           if (converted) {
-            events.push(converted.event);
+            events.push({ ...converted.event, ...metadata });
             fingerprintedValueCount += converted.fingerprinted;
             redactedFieldCount += converted.redacted;
           }
@@ -186,6 +202,7 @@ export function createEvidenceConverter(options: {
           const page = await pageDescriptor(item.event.url, options.fingerprintKey);
           if (page) {
             events.push({
+              ...metadata,
               event_id: randomUuid(),
               client_sequence: item.sequence,
               occurred_at: isoTime(item.event.timestamp),
@@ -195,7 +212,7 @@ export function createEvidenceConverter(options: {
           }
         } else if (item.kind === 'mutation') {
           const mutation = await convertMutation(item.event, item.sequence, options.fingerprintKey);
-          if (mutation) pageMutations.push(mutation);
+          if (mutation) pageMutations.push({ ...mutation, ...metadata });
         } else {
           const exchange = await convertExchange(
             item.request,
@@ -204,7 +221,7 @@ export function createEvidenceConverter(options: {
             options.fingerprintKey,
           );
           if (exchange) {
-            events.push(exchange.event);
+            events.push({ ...exchange.event, ...metadata });
             fingerprintedValueCount += exchange.fingerprinted;
             redactedFieldCount += exchange.redacted;
           }

@@ -266,6 +266,20 @@ p {
   width: 100%;
 }
 
+.jf-mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.jf-system-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
 .jf-muted {
   color: var(--mut);
   font-size: 12px;

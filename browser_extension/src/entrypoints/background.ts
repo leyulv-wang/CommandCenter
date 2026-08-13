@@ -29,7 +29,7 @@ import { db, getConfig } from '@/storage/db';
 
 type RuntimeMessage =
   | { type: 'get-active-recording' }
-  | { type: 'start-recording'; label?: string; profileId?: string }
+  | { type: 'start-recording'; label?: string; profileId?: string; profileIds?: string[] }
   | { type: 'stop-recording'; traceId?: string }
   | { type: 'get-command-center-status'; traceId: string }
   | { type: 'get-system-connection'; profileId: string }
@@ -157,7 +157,7 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
     }
 
     case 'start-recording': {
-      const row = await beginRecording(message.label, message.profileId);
+      const row = await beginRecording(message.label, message.profileId, message.profileIds);
       const captureSettings = await captureSettingsForActiveRecording(row.trace_id, row);
       return { active: true, traceId: activeTraceId, recovered: false, captureSettings, row };
     }
@@ -232,18 +232,24 @@ async function handleMessage(message: unknown, sender: SenderLike): Promise<unkn
 async function beginRecording(
   label?: string,
   profileId?: string,
+  profileIds?: string[],
 ): Promise<RecordingRow> {
   const config = await getConfig();
-  const requestedProfileId =
-    profileId ?? config.selectedCommandCenterProfileId;
-  const profile = profileById(
-    requestedProfileId,
-    config.commandCenterProfiles,
+  const requestedProfileIds = profileIds?.length
+    ? profileIds
+    : [profileId ?? config.selectedCommandCenterProfileId];
+  if (new Set(requestedProfileIds).size !== requestedProfileIds.length) {
+    throw new Error('业务系统录制配置不能重复。');
+  }
+  const profiles = requestedProfileIds.map((id) =>
+    profileById(id, config.commandCenterProfiles),
   );
-  if (!profile) throw new Error('没有可用的业务系统录制配置。');
+  if (profiles.some((profile) => !profile)) {
+    throw new Error('没有可用的业务系统录制配置。');
+  }
   const row = await commandCenterSession.start({
     objective: label?.trim() || '浏览器演示任务',
-    profile,
+    profiles: profiles as CommandCenterProfile[],
   });
   activeTraceId = row.trace_id;
   activeTraceRecovered = false;
@@ -252,6 +258,16 @@ async function beginRecording(
     activeTraceId,
     row.command_center?.allowed_origins ?? [],
   );
+  const tabs = await browser.tabs.query({ url: ['http://*/*', 'https://*/*'] });
+  for (const tab of tabs) {
+    if (
+      tab.id !== undefined &&
+      tab.url &&
+      originAllowed(tab.url, row.command_center?.allowed_origins ?? [])
+    ) {
+      webRequestScope.connectTab(tab.id);
+    }
+  }
   const captureSettings = await captureSettingsForActiveRecording(activeTraceId, row);
   await broadcastRecordingState(
     true,

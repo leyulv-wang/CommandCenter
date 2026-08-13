@@ -17,6 +17,32 @@ function base(kind: CapturedEvent['kind'], timestamp: number) {
 }
 
 describe('CommandCenter evidence converter', () => {
+  it('annotates evidence from two tabs with configured system identity', async () => {
+    const converter = createEvidenceConverter({
+      allowedOrigins: ['http://yifeng.dtsum.com', 'http://127.0.0.1:8101'],
+      originSystemCodes: {
+        'http://yifeng.dtsum.com': 'yifeng_mes',
+        'http://127.0.0.1:8101': 'connected_system',
+      },
+      fingerprintKey: 'local-recording-key',
+    });
+    converter.append({
+      ...base('action', 1_000), kind: 'action', action_type: 'click',
+      target: { tag: 'button', selector: '#query', xpath: '//*[@id="query"]' },
+    });
+    converter.append({
+      ...base('action', 1_010), tab_id: 9,
+      url: 'http://127.0.0.1:8101/', kind: 'action', action_type: 'submit',
+      target: { tag: 'form', selector: '#follow-up', xpath: '//*[@id="follow-up"]' },
+    });
+
+    const batch = await converter.flush(recordingId);
+
+    expect(batch?.events).toMatchObject([
+      { system_code: 'yifeng_mes', tab_id: 7 },
+      { system_code: 'connected_system', tab_id: 9 },
+    ]);
+  });
   it('aligns UI values with repeated query values without exposing raw text', async () => {
     const converter = createEvidenceConverter({
       allowedOrigins: ['http://yifeng.dtsum.com'],

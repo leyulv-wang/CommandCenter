@@ -332,9 +332,12 @@ export type RecordingRow = {
   command_center?: {
     base_url: string;
     system_code: string;
+    recording_kind?: 'single_system' | 'multi_system';
+    system_codes?: string[];
     recording_id: string;
     recording_token: string;
     allowed_origins: string[];
+    origin_system_codes?: Record<string, string>;
     fingerprint_key: string;
     remote_status?: string;
   };

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createCommandCenterSessionCoordinator } from '@/command-center/session';
 import { DEFAULT_COMMAND_CENTER_PROFILE } from '@/command-center/config';
+import { LOCAL_PURCHASE_COMMAND_CENTER_PROFILE } from '@/command-center/config';
 import type { RecordingRow } from '@/shared/types';
 
 vi.mock('wxt/browser', () => ({
@@ -85,13 +86,53 @@ describe('CommandCenter session coordinator', () => {
       commandCenter: {
         base_url: 'http://127.0.0.1:8000',
         system_code: 'yifeng_mes',
+        recording_kind: 'single_system',
+        system_codes: ['yifeng_mes'],
         recording_id: recordingId,
         recording_token: 'single-use-token',
         allowed_origins: ['http://yifeng.dtsum.com'],
+        origin_system_codes: { 'http://yifeng.dtsum.com': 'yifeng_mes' },
         fingerprint_key: expect.any(String),
       },
     });
     expect(started.status).toBe('recording');
+  });
+
+  it('creates one joint session from two ordered system profiles', async () => {
+    const client = {
+      createRecording: vi.fn(async () => ({ recordingId })),
+      start: vi.fn(async () => ({ recordingToken: 'joint-token' })),
+      uploadEvents: vi.fn(), stop: vi.fn(), abort: vi.fn(), getStatus: vi.fn(),
+    };
+    const startLocal = vi.fn(async () => row('recording'));
+    const coordinator = createCommandCenterSessionCoordinator({
+      clientFactory: () => client,
+      startLocal,
+      stopLocal: vi.fn(), uploadLocal: vi.fn(), getLocal: vi.fn(),
+    });
+
+    await coordinator.start({
+      objective: '跨系统采购跟进',
+      profiles: [DEFAULT_COMMAND_CENTER_PROFILE, LOCAL_PURCHASE_COMMAND_CENTER_PROFILE],
+    });
+
+    expect(client.createRecording).toHaveBeenCalledWith({
+      objective: '跨系统采购跟进',
+      sourceSystem: 'yifeng_mes',
+      sourceSystems: ['yifeng_mes', 'connected_system'],
+      recordingMode: 'multi_system',
+    });
+    expect(startLocal).toHaveBeenCalledWith(expect.objectContaining({
+      commandCenter: expect.objectContaining({
+        recording_kind: 'multi_system',
+        system_codes: ['yifeng_mes', 'connected_system'],
+        allowed_origins: ['http://yifeng.dtsum.com', 'http://127.0.0.1:8101'],
+        origin_system_codes: {
+          'http://yifeng.dtsum.com': 'yifeng_mes',
+          'http://127.0.0.1:8101': 'connected_system',
+        },
+      }),
+    }));
   });
 
   it('stops local capture before uploading and submitting remote analysis', async () => {

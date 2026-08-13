@@ -18,7 +18,8 @@ type StartLocal = (options: {
 export type CommandCenterSessionCoordinator = {
   start(input: {
     objective: string;
-    profile: CommandCenterProfile;
+    profile?: CommandCenterProfile;
+    profiles?: CommandCenterProfile[];
   }): Promise<RecordingRow>;
   stop(traceId: string): Promise<RecordingRow>;
   resumeUpload(traceId: string): Promise<RecordingRow>;
@@ -49,20 +50,39 @@ export function createCommandCenterSessionCoordinator(
     async start(input) {
       const objective = input.objective.trim();
       if (!objective) throw new Error('演示目标不能为空。');
-      const client = clientFactory(input.profile.commandCenterUrl);
+      const profiles = input.profiles ?? (input.profile ? [input.profile] : []);
+      if (profiles.length === 0) throw new Error('至少选择一个业务系统。');
+      const primaryProfile = profiles[0];
+      if (!primaryProfile) throw new Error('至少选择一个业务系统。');
+      const commandCenterUrl = primaryProfile.commandCenterUrl;
+      if (profiles.some((profile) => profile.commandCenterUrl !== commandCenterUrl)) {
+        throw new Error('联合录制的业务系统必须连接同一个中控。');
+      }
+      const client = clientFactory(commandCenterUrl);
       const created = await client.createRecording({
         objective,
-        sourceSystem: input.profile.systemCode,
+        sourceSystem: primaryProfile.systemCode,
+        sourceSystems: profiles.map((profile) => profile.systemCode),
+        recordingMode: profiles.length > 1 ? 'multi_system' : 'single_system',
       });
       const grant = await client.start(created.recordingId);
+      const allowedOrigins = profiles.flatMap((profile) => profile.origins);
+      const originSystemCodes = Object.fromEntries(
+        profiles.flatMap((profile) =>
+          profile.origins.map((origin) => [new URL(origin).origin, profile.systemCode]),
+        ),
+      );
       return await startLocal({
         label: objective,
         commandCenter: {
-          base_url: input.profile.commandCenterUrl,
-          system_code: input.profile.systemCode,
+          base_url: commandCenterUrl,
+          system_code: primaryProfile.systemCode,
+          recording_kind: profiles.length > 1 ? 'multi_system' : 'single_system',
+          system_codes: profiles.map((profile) => profile.systemCode),
           recording_id: created.recordingId,
           recording_token: grant.recordingToken,
-          allowed_origins: [...input.profile.origins],
+          allowed_origins: allowedOrigins,
+          origin_system_codes: originSystemCodes,
           fingerprint_key: crypto.randomUUID(),
         },
       });

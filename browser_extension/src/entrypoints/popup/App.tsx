@@ -26,6 +26,8 @@ type View = 'loading' | 'idle' | 'recording' | 'processing';
 export function PopupApp() {
   const [view, setView] = useState<View>('loading');
   const [profile, setProfile] = useState<CommandCenterProfile | null>(null);
+  const [profiles, setProfiles] = useState<CommandCenterProfile[]>([]);
+  const [recordingKind, setRecordingKind] = useState<'single_system' | 'multi_system'>('single_system');
   const [tabHost, setTabHost] = useState('未选择可录制页面');
   const [objective, setObjective] = useState('');
   const [activeRow, setActiveRow] = useState<RecordingRow | null>(null);
@@ -46,6 +48,7 @@ export function PopupApp() {
         if (cancelled) return;
         const tabUrl = tabs[0]?.url ?? '';
         const selected = profileForUrl(tabUrl, config.commandCenterProfiles);
+        setProfiles(config.commandCenterProfiles);
         setProfile(selected);
         setTabHost(hostFor(tabUrl));
         if (active.active && active.row) {
@@ -140,10 +143,16 @@ export function PopupApp() {
   function start(): void {
     if (!profile || !objective.trim()) return;
     void run(async () => {
+      const jointProfiles = [
+        profiles.find((item) => item.id === 'yifeng-mes'),
+        profiles.find((item) => item.id === 'local-purchase'),
+      ].filter((item): item is CommandCenterProfile => Boolean(item));
       const response = await sendRuntimeMessage<RecordingActionResponse>({
         type: 'start-recording',
         label: objective.trim(),
-        profileId: profile.id,
+        ...(recordingKind === 'multi_system'
+          ? { profileIds: jointProfiles.map((item) => item.id) }
+          : { profileId: profile.id }),
       });
       if (!response.row) throw new Error('扩展未返回录制会话。');
       setActiveRow(response.row);
@@ -202,7 +211,10 @@ export function PopupApp() {
   }
 
   const canStart =
-    view === 'idle' && Boolean(profile) && Boolean(objective.trim()) && !busy;
+    view === 'idle' && Boolean(profile) && Boolean(objective.trim()) && !busy &&
+    (recordingKind === 'single_system' ||
+      profiles.some((item) => item.id === 'yifeng-mes') &&
+      profiles.some((item) => item.id === 'local-purchase'));
 
   return (
     <main className="jf-popup">
@@ -261,6 +273,38 @@ export function PopupApp() {
 
       {view === 'idle' ? (
         <>
+          <div className="jf-mode-switch" aria-label="录制方式">
+            <Button
+              variant={recordingKind === 'single_system' ? 'primary' : 'secondary'}
+              onClick={() => setRecordingKind('single_system')}
+              disabled={busy}
+            >
+              单系统录制
+            </Button>
+            <Button
+              variant={recordingKind === 'multi_system' ? 'primary' : 'secondary'}
+              onClick={() => setRecordingKind('multi_system')}
+              disabled={busy}
+            >
+              联合录制
+            </Button>
+          </div>
+          {recordingKind === 'multi_system' ? (
+            <Card>
+              <CardContent>
+                <p className="jf-muted">本次联合录制包含：</p>
+                {[
+                  profiles.find((item) => item.id === 'yifeng-mes'),
+                  profiles.find((item) => item.id === 'local-purchase'),
+                ].filter((item): item is CommandCenterProfile => Boolean(item)).map((item) => (
+                  <label className="jf-system-option" key={item.id}>
+                    <input type="checkbox" checked readOnly aria-label={item.displayName} />
+                    <span>{item.displayName}</span>
+                  </label>
+                ))}
+              </CardContent>
+            </Card>
+          ) : null}
           <label className="jf-field">
             <span>演示目标</span>
             <Input
@@ -285,7 +329,12 @@ export function PopupApp() {
 
       {view === 'recording' ? (
         <>
-          <Alert tone="warning">正在录制：{objective}</Alert>
+          <Alert tone="warning">
+            正在录制：{objective}
+            {activeRow?.command_center?.recording_kind === 'multi_system'
+              ? '（联合录制）'
+              : ''}
+          </Alert>
           <Button
             variant="danger"
             className="jf-wide"

@@ -23,6 +23,8 @@ export type CommandCenterRecordingClient = {
   createRecording(input: {
     objective: string;
     sourceSystem: string;
+    sourceSystems?: string[];
+    recordingMode?: 'single_system' | 'multi_system';
   }): Promise<{ recordingId: string }>;
   start(recordingId: string): Promise<{ recordingToken: string }>;
   uploadEvents(
@@ -101,6 +103,8 @@ export function createCommandCenterClient(options: {
         body: JSON.stringify({
           objective: input.objective,
           source_system: input.sourceSystem,
+          source_systems: input.sourceSystems,
+          recording_mode: input.recordingMode ?? 'single_system',
           source_task_id: 'browser-extension-demonstration',
           capture_source: 'browser_extension',
         }),

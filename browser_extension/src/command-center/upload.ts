@@ -58,6 +58,9 @@ export function createCommandCenterUploadRunner(options: {
     try {
       const converter = createEvidenceConverter({
         allowedOrigins: connection.allowed_origins,
+        ...(connection.origin_system_codes
+          ? { originSystemCodes: connection.origin_system_codes }
+          : {}),
         fingerprintKey: connection.fingerprint_key,
         maxBufferedEvents: 10_000,
       });
