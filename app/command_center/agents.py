@@ -90,6 +90,7 @@ class AgentSuite:
             TraceSegmentation,
             (
                 "你是演示时序分段智能体。只依据已脱敏的 UI、页面变化和网络证据，"
+                "system_code 与 tab_id 用于识别跨系统页面切换；一个业务动作可以跨越多个系统，"
                 "把连续操作划分为业务动作、辅助查询、验证查询、导航、静态或遥测流量"
                 "以及不确定片段。不要猜测不存在的证据；不确定时明确列入 uncertainties。"
                 "conclusive 表示整体是否足以继续学习核心业务能力，不表示必须不存在任何"
@@ -113,6 +114,7 @@ class AgentSuite:
             (
                 "你是 API 归因智能体。结合时序片段与 Tool 目录，区分主业务 API、"
                 "辅助查询、验证查询、静态或遥测流量以及不确定候选。只能引用输入中"
+                "按每条交换自身的 system_code 在 Tool 目录中归因，保留跨系统先后关系。"
                 "真实存在的片段、网络交换和 Tool；HTTP GET 本身不代表安全或业务主接口。"
             ),
             {"segmentation": segmentation, "trace": trace, "catalog": catalog},
@@ -131,6 +133,7 @@ class AgentSuite:
             (
                 "你是字段映射智能体。根据已脱敏页面证据、请求参数名、值指纹及 API 归因，"
                 "把会随运行变化的业务输入映射到 query、path 或 body 目标。语义理解由你判断；"
+                "跨系统时允许后续写操作引用前序读取步骤的可信输出；"
                 "证据不足必须标记 uncertainty，不能用名称关键词硬猜。"
                 "页面 value_fingerprint 与 query_parameter_fingerprints 中的 HMAC 指纹相同只能证明值相等，"
                 "仍须结合控件语义、操作时序、API 归因和 Tool schema 判断业务含义；"
@@ -167,6 +170,7 @@ class AgentSuite:
                 "只使用归因为主业务、辅助或验证用途且存在于目录中的 Tool；不要复制单次演示值。"
                 "输入绑定只使用 task、steps、literal 数据路径，目标以 body.、path. 或 query. 开头；"
                 "写操作必须提供幂等模板，成功条件必须是可复用业务不变量。"
+                "跨系统 Skill 应保留最小必要步骤，并使用 steps.<step_id>.output 路径传递前序输出。"
                 f"{BINDING_PROTOCOL_PROMPT}"
             )
         skill = self.model.generate(
@@ -176,6 +180,7 @@ class AgentSuite:
         )
         if not legacy:
             _validate_skill_tool_references(skill, catalog)
+            _validate_primary_system_coverage(skill, attribution, catalog)
         return skill
 
     def design_tests(self, skill: SkillDefinition) -> TestPlan:
@@ -526,6 +531,19 @@ def _catalog_tool_ids(catalog: Any) -> set[str]:
     }
 
 
+def _catalog_tool_systems(catalog: Any) -> dict[str, str]:
+    payload = (
+        catalog.to_agent_payload()
+        if hasattr(catalog, "to_agent_payload")
+        else catalog if isinstance(catalog, dict) else {}
+    )
+    return {
+        str(item["tool_id"]): str(item["system_code"])
+        for item in payload.get("tools", [])
+        if isinstance(item, dict) and item.get("tool_id") and item.get("system_code")
+    }
+
+
 def _validate_known(references: list[Any], known: set[str], label: str) -> None:
     unknown = {str(reference) for reference in references} - known
     if unknown:
@@ -613,6 +631,29 @@ def _validate_skill_tool_references(skill: SkillDefinition, catalog: Any) -> Non
         _catalog_tool_ids(catalog),
         "Tool",
     )
+
+
+def _validate_primary_system_coverage(
+    skill: SkillDefinition,
+    attribution: APIAttributionAnalysis,
+    catalog: Any,
+) -> None:
+    """Keep compiled steps faithful to systems the agent marked as core evidence."""
+
+    tool_systems = _catalog_tool_systems(catalog)
+    primary_systems = {
+        tool_systems[tool_id]
+        for segment in attribution.segments
+        for tool_id in segment.primary_tool_ids
+        if tool_id in tool_systems
+    }
+    compiled_systems = {
+        tool_systems[step.tool_id]
+        for step in skill.steps
+        if step.tool_id in tool_systems
+    }
+    if not primary_systems.issubset(compiled_systems):
+        raise ValueError("compiled Skill omits a primary system from attributed evidence")
 
 
 def _validate_match_references(

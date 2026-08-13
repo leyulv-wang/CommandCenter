@@ -528,9 +528,10 @@ class CommandCenterService:
             if not trace.get("api_exchanges") and self.browser_skill_distiller is not None:
                 result = self._compile_browser_candidate(recording)
             else:
-                graph = self.learning_graph_factory(
-                    str(recording["source_system"]), identifier
-                )
+                source_systems = recording.get("source_systems") or [
+                    str(recording["source_system"])
+                ]
+                graph = self.learning_graph_factory(source_systems, identifier)
                 result = graph.invoke(
                     {"recording_id": str(identifier), "trace": trace}
                 )

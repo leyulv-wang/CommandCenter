@@ -1,6 +1,8 @@
 import json
 from uuid import uuid4
 
+import pytest
+
 from app.command_center.agents import AgentSuite
 from app.command_center.model import StructuredModel
 from app.command_center.schemas import (
@@ -344,6 +346,54 @@ def test_field_mapping_agent_uses_query_fingerprint_equality_without_name_guessi
     assert "控件语义、操作时序" in model.prompt
     assert "不能只根据字段名称" in model.prompt
     assert "指纹缺失或不相等" in model.prompt
+
+
+class CrossSystemCompileModel:
+    def generate(self, schema, system_prompt, payload):
+        self.prompt = system_prompt
+        candidate = valid_skill_payload()
+        candidate["steps"][0]["tool_id"] = "yifeng_mes:listPurchaseApply"
+        candidate["steps"][0]["side_effect"] = "read"
+        candidate["steps"][0]["idempotency_key_template"] = None
+        return schema.model_validate(candidate)
+
+
+def test_cross_system_compilation_requires_each_primary_system_in_skill():
+    model = CrossSystemCompileModel()
+    agents = AgentSuite(model)
+    attribution = APIAttributionAnalysis.model_validate(
+        {
+            "segments": [
+                {
+                    "segment_id": "mes_read",
+                    "primary_tool_ids": ["yifeng_mes:listPurchaseApply"],
+                    "evidence_summary": "MES 查询",
+                },
+                {
+                    "segment_id": "local_write",
+                    "primary_tool_ids": ["connected_system:createPurchaseFollowUp"],
+                    "evidence_summary": "本地创建跟进单",
+                },
+            ],
+            "attributable": True,
+        }
+    )
+    catalog = {
+        "tools": [
+            {"tool_id": "yifeng_mes:listPurchaseApply", "system_code": "yifeng_mes"},
+            {"tool_id": "connected_system:createPurchaseFollowUp", "system_code": "connected_system"},
+        ]
+    }
+
+    with pytest.raises(ValueError, match="primary system"):
+        agents.compile_skill(
+            FieldMappingAnalysis.model_validate(
+                {"mappings": [], "uncertainties": [], "compilable": True}
+            ),
+            attribution,
+            {"api_exchanges": []},
+            catalog,
+        )
 
 
 class SegmentationOnlyModel:

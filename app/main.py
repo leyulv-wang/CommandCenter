@@ -22,6 +22,7 @@ from app.command_center.execution_graph import (
 from app.command_center.direct_tool_runner import DirectToolRunner
 from app.command_center.learning_graph import LearningDependencies, build_learning_graph
 from app.command_center.credential_vault import EphemeralCredentialVault
+from app.command_center.cross_system_testing import CrossSystemSkillTestService
 from app.command_center.system_connections import (
     ConnectionHandshakeStore,
     KeyringSystemCredentialStore,
@@ -482,13 +483,42 @@ def build_command_center_components(
             runner=SkillRunner(executor),
         )
 
-    def learning_graph_factory(system_code: str, recording_id: UUID):
-        catalog = catalogs.get(system_code)
+    def learning_graph_factory(system_codes: list[str] | str, recording_id: UUID):
+        codes = [system_codes] if isinstance(system_codes, str) else system_codes
+        resolved_catalogs = [catalogs.get(system_code) for system_code in codes]
+        catalog = ToolCatalog(
+            [
+                tool
+                for resolved_catalog in resolved_catalogs
+                for tool in resolved_catalog.definitions()
+            ]
+        )
+        primary_system = codes[0]
+        if len(codes) > 1:
+            tester = CrossSystemSkillTestService(
+                catalog=catalog,
+                runner=SkillRunner(
+                    ToolExecutor(
+                        catalog,
+                        client,
+                        credential_provider=lambda system_code: (
+                            credential_vault.headers_for(recording_id)
+                            if system_code == primary_system
+                            else {}
+                        ),
+                    )
+                ),
+                verifier=agents,
+                client=client,
+                local_base_url=base_urls["connected_system"],
+            )
+        else:
+            tester = readonly_tester_factory(primary_system, recording_id)
         return build_learning_graph(
             LearningDependencies(
                 repository=repository,
                 agents=agents,
-                tester=readonly_tester_factory(system_code, recording_id),
+                tester=tester,
                 catalog=catalog,
                 publish_policy="verified_candidate",
             )

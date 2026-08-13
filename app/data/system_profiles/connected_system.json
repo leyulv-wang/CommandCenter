@@ -39,6 +39,26 @@
       "method": "GET",
       "path": "/api/system-profile",
       "side_effect": "read"
+    },
+    {
+      "method": "GET",
+      "path": "/api/purchase-follow-ups",
+      "side_effect": "read"
+    },
+    {
+      "method": "GET",
+      "path": "/api/purchase-follow-ups/{follow_up_id}",
+      "side_effect": "read"
+    },
+    {
+      "method": "POST",
+      "path": "/api/purchase-follow-ups",
+      "side_effect": "write"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/purchase-follow-ups/{follow_up_id}",
+      "side_effect": "write"
     }
   ]
 }
