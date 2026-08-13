@@ -24,10 +24,8 @@ def cross_system_skill() -> SkillDefinition:
             "name": "创建采购跟进任务",
             "tool_id": "connected_system:createPurchaseFollowUp",
             "input_bindings": {
-                "body.mes_apply_no": "steps.read_mes.output.applyNo",
-                "body.material": "steps.read_mes.output.material",
-                "body.quantity": "steps.read_mes.output.quantity",
-                "body.applicant": "steps.read_mes.output.applicant",
+                "body.title": "task.content.title",
+                "body.items": "steps.read_mes.output.items",
                 "body.remark": "task.content.remark",
                 "body.record_purpose": "task.content.record_purpose",
                 "body.verification_run_id": "task.content.verification_run_id",
@@ -102,7 +100,7 @@ def test_cross_system_test_marks_reads_verifies_and_cleans_local_record():
 
     result = service.run(
         cross_system_skill(),
-        {"category": "normal", "fixture": {"source_task": {"content": {"record_id": "MES-1", "remark": "验证"}}}},
+        {"category": "normal", "fixture": {"source_task": {"content": {"record_id": "MES-1", "title": "采购申请跟进", "remark": "验证"}}}},
     )
 
     assert result["status"] == "passed"

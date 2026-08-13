@@ -407,14 +407,29 @@ def test_purchase_follow_up_is_created_idempotently_and_can_be_read(tmp_path: Pa
     )
     client = TestClient(app)
     payload = {
-        "mes_apply_no": "CGSQ26032701",
-        "material": "LS 7056AB",
-        "quantity": 19008,
-        "applicant": "孟明佳",
+        "title": "采购申请跟进",
         "remark": "跨系统联合录制演示",
+        "items": [
+            {
+                "material_code": "LCF4607A",
+                "quantity": 600,
+                "unit": "KG",
+                "suggested_supplier": "陶氏有机硅(张家港)",
+                "required_date": "2026-04-21",
+                "remark": "",
+            },
+            {
+                "material_code": "LCF4607B",
+                "quantity": 600,
+                "unit": "KG",
+                "suggested_supplier": "陶氏有机硅(张家港)",
+                "required_date": "2026-04-21",
+                "remark": "",
+            },
+        ],
         "record_purpose": "formal",
     }
-    headers = {"Idempotency-Key": "follow-up:CGSQ26032701"}
+    headers = {"Idempotency-Key": "follow-up:visible-details"}
 
     first = client.post("/api/purchase-follow-ups", json=payload, headers=headers)
     second = client.post("/api/purchase-follow-ups", json=payload, headers=headers)
@@ -424,6 +439,11 @@ def test_purchase_follow_up_is_created_idempotently_and_can_be_read(tmp_path: Pa
     assert second.json() == first.json()
     follow_up_id = first.json()["follow_up_id"]
     assert first.json()["record_purpose"] == "formal"
+    assert first.json()["source_reference"] is None
+    assert [item["material_code"] for item in first.json()["items"]] == [
+        "LCF4607A",
+        "LCF4607B",
+    ]
     assert client.get(f"/api/purchase-follow-ups/{follow_up_id}").json() == first.json()
 
 
@@ -439,11 +459,18 @@ def test_purchase_follow_up_cleanup_requires_owned_automated_test_record(tmp_pat
     )
     client = TestClient(app)
     base = {
-        "mes_apply_no": "CGSQ26032701",
-        "material": "LS 7056AB",
-        "quantity": 19008,
-        "applicant": "孟明佳",
+        "title": "采购申请跟进",
         "remark": "自动验证",
+        "items": [
+            {
+                "material_code": "LCF4607A",
+                "quantity": 600,
+                "unit": "KG",
+                "suggested_supplier": "陶氏有机硅(张家港)",
+                "required_date": "2026-04-21",
+                "remark": "",
+            }
+        ],
     }
     formal = client.post(
         "/api/purchase-follow-ups",
@@ -500,11 +527,18 @@ def test_automated_follow_up_requires_verification_run_id(tmp_path: Path):
     response = client.post(
         "/api/purchase-follow-ups",
         json={
-            "mes_apply_no": "CGSQ26032701",
-            "material": "LS 7056AB",
-            "quantity": 1,
-            "applicant": "孟明佳",
+            "title": "采购申请跟进",
             "remark": "自动验证",
+            "items": [
+                {
+                    "material_code": "LCF4607A",
+                    "quantity": 1,
+                    "unit": "KG",
+                    "suggested_supplier": "",
+                    "required_date": "",
+                    "remark": "",
+                }
+            ],
             "record_purpose": "automated_test",
         },
         headers={"Idempotency-Key": "invalid-test-follow-up"},

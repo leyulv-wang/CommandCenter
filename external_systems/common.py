@@ -34,14 +34,24 @@ class PurchaseRequest(BaseModel):
     reason: str
 
 
+class PurchaseFollowUpItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    material_code: str = Field(min_length=1, max_length=128)
+    quantity: float = Field(gt=0)
+    unit: str = Field(min_length=1, max_length=32)
+    suggested_supplier: str = Field(default="", max_length=300)
+    required_date: str = Field(default="", max_length=32)
+    remark: str = Field(default="", max_length=1_000)
+
+
 class PurchaseFollowUpRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mes_apply_no: str = Field(min_length=1, max_length=128)
-    material: str = Field(min_length=1, max_length=300)
-    quantity: float = Field(gt=0)
-    applicant: str = Field(min_length=1, max_length=128)
+    title: str = Field(min_length=1, max_length=300)
     remark: str = Field(default="", max_length=1_000)
+    items: list[PurchaseFollowUpItem] = Field(min_length=1, max_length=100)
+    source_reference: str | None = Field(default=None, max_length=128)
     record_purpose: Literal["formal", "automated_test"] = "formal"
     verification_run_id: str | None = Field(default=None, max_length=128)
 
@@ -152,15 +162,22 @@ def create_external_app(
             cursor = connection.execute(
                 """
                 insert into purchase_follow_ups(
-                    mes_apply_no, material, quantity, applicant, remark,
-                    record_purpose, verification_run_id, created_at
-                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                    mes_apply_no, material, quantity, applicant, title, items_json,
+                    source_reference, remark, record_purpose, verification_run_id,
+                    created_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    request.mes_apply_no,
-                    request.material,
-                    request.quantity,
-                    request.applicant,
+                    request.source_reference or "internal",
+                    request.items[0].material_code,
+                    request.items[0].quantity,
+                    "internal",
+                    request.title,
+                    json.dumps(
+                        [item.model_dump(mode="json") for item in request.items],
+                        ensure_ascii=False,
+                    ),
+                    request.source_reference,
                     request.remark,
                     request.record_purpose,
                     request.verification_run_id,
@@ -706,6 +723,9 @@ def _initialize_database(
                 remark text not null,
                 record_purpose text not null,
                 verification_run_id text,
+                title text,
+                items_json text,
+                source_reference text,
                 created_at text not null
             )
             """
@@ -727,6 +747,9 @@ def _initialize_database(
             "text not null default 'custom_url'",
         )
         _ensure_column(connection, "submissions", "fd_template_id", "text")
+        _ensure_column(connection, "purchase_follow_ups", "title", "text")
+        _ensure_column(connection, "purchase_follow_ups", "items_json", "text")
+        _ensure_column(connection, "purchase_follow_ups", "source_reference", "text")
         connection.execute(
             """
             create table if not exists tasks (
@@ -822,13 +845,21 @@ def _task_row_to_dict(row: sqlite3.Row) -> dict[str, object]:
 
 
 def _purchase_follow_up_row(row: sqlite3.Row) -> dict[str, object]:
-    quantity = row["quantity"]
+    items = json.loads(row["items_json"]) if row["items_json"] else [
+        {
+            "material_code": row["material"],
+            "quantity": row["quantity"],
+            "unit": "",
+            "suggested_supplier": "",
+            "required_date": "",
+            "remark": "",
+        }
+    ]
     return {
         "follow_up_id": row["follow_up_id"],
-        "mes_apply_no": row["mes_apply_no"],
-        "material": row["material"],
-        "quantity": int(quantity) if float(quantity).is_integer() else quantity,
-        "applicant": row["applicant"],
+        "title": row["title"] or "采购申请跟进",
+        "items": items,
+        "source_reference": row["source_reference"],
         "remark": row["remark"],
         "record_purpose": row["record_purpose"],
         "verification_run_id": row["verification_run_id"],

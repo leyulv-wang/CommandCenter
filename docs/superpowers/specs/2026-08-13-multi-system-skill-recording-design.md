@@ -25,9 +25,9 @@ CommandCenter 已完成两条基础能力：一是浏览器扩展观察单个业
 ```text
 开始联合录制
 → 在 MES 查询并查看一条采购申请
-→ 复制或记住申请编号、物料、数量和申请人
+→ 查看申请中用户可见的采购明细
 → 切换到本地采购系统
-→ 填写采购跟进任务
+→ 填写一个采购跟进任务及其多条物料明细
 → 提交任务
 → 结束联合录制
 ```
@@ -127,15 +127,14 @@ CommandCenter 已完成两条基础能力：一是浏览器扩展观察单个业
 
 ## 7. 本地采购跟进任务
 
-本地采购系统增加独立的“采购跟进任务”，不复制或冒充 MES 原始采购申请。第一版字段：
+本地采购系统增加独立的“采购跟进任务”，不复制或冒充 MES 原始采购申请。一份采购申请对应一个跟进任务，任务内可以包含多条物料明细。第一版字段：
 
-- MES 申请编号；
-- 物料名称或物料编码；
-- 数量；
-- 申请人；
-- 备注；
+- 任务名称和备注；
+- 明细中的物料编码、数量、单位、建议供应商、需求时间和备注；
 - 记录用途：正式或自动测试；
-- 来源录制编号或正式 Skill 执行编号。
+- 后台来源引用：录制编号、正式 Skill 执行编号或 MES 内部记录标识。
+
+后台来源引用不出现在员工演示表单中。员工不需要知道、复制或填写 MES 申请编号和内部 ID。
 
 提供创建、读取和删除 API。创建接口必须支持幂等键，防止模型超时或网络重试产生重复任务。删除能力只用于测试系统自动清理，并通过明确的测试任务标识限制作用范围。
 
@@ -162,11 +161,11 @@ CommandCenter 已完成两条基础能力：一是浏览器扩展观察单个业
 结合页面标签、实际值、API 字段、格式转换和业务语义提出跨系统绑定，例如：
 
 ```text
-MES.applyNo             → local.mes_apply_no
-MES.articleNo           → local.material_code
-MES.materialDescription → local.material_name
-MES.quantity            → local.quantity
-MES.applyBy              → local.applicant
+MES.details[].articleNo          → local.items[].material_code
+MES.details[].quantity           → local.items[].quantity
+MES.details[].unit               → local.items[].unit
+MES.details[].suggestedSupplier  → local.items[].suggested_supplier
+MES.details[].requiredDate       → local.items[].required_date
 ```
 
 这只是候选映射示例，不作为硬编码字段规则。真实映射必须引用录制事件、Tool 请求、Tool 响应和接口定义。时间相邻仅作为候选证据；值一致、业务标签和接口语义共同构成映射依据。无法确定时进入“需要重新演示”，不得猜测。

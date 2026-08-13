@@ -77,7 +77,7 @@ async function refreshData() {
 
 function renderFollowUps(items) {
   byId('purchase-follow-up-list').innerHTML = items.length
-    ? items.map((item) => `<article class="record"><strong>${escapeHtml(item.follow_up_id)}</strong><p>MES 申请：${escapeHtml(item.mes_apply_no)}</p><p>物料：${escapeHtml(item.material)}</p><p>数量：${escapeHtml(item.quantity)}</p><p>申请人：${escapeHtml(item.applicant)}</p></article>`).join('')
+    ? items.map((item) => `<article class="record"><strong>${escapeHtml(item.follow_up_id)} · ${escapeHtml(item.title)}</strong><p>${item.items.map((detail) => `${escapeHtml(detail.material_code)} / ${escapeHtml(detail.quantity)} ${escapeHtml(detail.unit)}`).join('<br>')}</p></article>`).join('')
     : '<div class="empty">暂无采购跟进任务</div>'
 }
 
@@ -90,16 +90,28 @@ async function createPurchaseFollowUp(event) {
       'Idempotency-Key': idempotencyKey('create-purchase-follow-up'),
     },
     body: JSON.stringify({
-      mes_apply_no: byId('follow-up-mes-apply-no').value,
-      material: byId('follow-up-material').value,
-      quantity: Number(byId('follow-up-quantity').value),
-      applicant: byId('follow-up-applicant').value,
+      title: byId('follow-up-title').value,
       remark: byId('follow-up-remark').value,
+      items: [...byId('follow-up-items').querySelectorAll('.follow-up-item')].map((row) => ({
+        material_code: row.querySelector('[data-field="material_code"]').value,
+        quantity: Number(row.querySelector('[data-field="quantity"]').value),
+        unit: row.querySelector('[data-field="unit"]').value,
+        suggested_supplier: row.querySelector('[data-field="suggested_supplier"]').value,
+        required_date: row.querySelector('[data-field="required_date"]').value,
+        remark: row.querySelector('[data-field="remark"]').value,
+      })),
       record_purpose: 'formal',
     }),
   })
   byId('purchase-follow-up-result').textContent = `跟进任务：${response.follow_up_id}`
   await refreshData()
+}
+
+function addFollowUpItem() {
+  const first = byId('follow-up-items').querySelector('.follow-up-item')
+  const next = first.cloneNode(true)
+  next.querySelectorAll('input').forEach((input) => { input.value = '' })
+  byId('follow-up-items').appendChild(next)
 }
 
 async function refreshSubmissions() {
@@ -201,6 +213,7 @@ async function init() {
   byId('task-form').addEventListener('submit', (event) => createTask(event).catch((error) => showMessage(error.message)))
   byId('purchase-operation-form').addEventListener('submit', (event) => createPurchase(event).catch((error) => showMessage(error.message)))
   byId('purchase-follow-up-form').addEventListener('submit', (event) => createPurchaseFollowUp(event).catch((error) => showMessage(error.message)))
+  byId('add-follow-up-item').addEventListener('click', addFollowUpItem)
   byId('purchase-link-form').addEventListener('submit', (event) => linkPurchase(event).catch((error) => showMessage(error.message)))
   byId('purchase-operation').hidden = profile.interface_type !== 'workflow'
   byId('purchase-follow-up-operation').hidden = profile.system_code !== 'connected_system'
