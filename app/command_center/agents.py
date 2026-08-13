@@ -228,21 +228,63 @@ class AgentSuite:
         if not legacy:
             _validate_skill_tool_references(skill, catalog)
             _validate_primary_system_coverage(skill, attribution, catalog)
+            contract_errors = _skill_tool_contract_errors(skill, catalog)
+            if contract_errors:
+                repair_prompt = (
+                    f"{prompt}"
+                    "\n上一次候选 Skill 未满足 OpenAPI Tool 的确定性请求契约。"
+                    "请重新生成完整 Skill，并为下列每个必填目标提供可解析的 input_bindings；"
+                    "不得填入演示期固定业务值：\n- "
+                    + "\n- ".join(contract_errors)
+                )
+                skill = self.model.generate(
+                    SkillDefinition,
+                    repair_prompt,
+                    {**payload, "invalid_candidate_skill": skill},
+                )
+                _validate_skill_tool_references(skill, catalog)
+                _validate_primary_system_coverage(skill, attribution, catalog)
+                remaining_errors = _skill_tool_contract_errors(skill, catalog)
+                if remaining_errors:
+                    raise ValueError(
+                        "compiled Skill violates Tool request contract: "
+                        + "; ".join(remaining_errors)
+                    )
         return skill
 
     def design_tests(self, skill: SkillDefinition) -> TestPlan:
-        return self.model.generate(
-            TestPlan,
-            (
+        prompt = (
                 "你是测试设计智能体。为候选 Skill 生成 normal、parameter_variation、"
                 "idempotency 三类测试，每类恰好一个，数据仅用于本地采购测试系统。"
                 "逐项检查 Skill 全部 input_bindings：每个 task.* 绑定都必须在该 case 的 "
-                "fixture.source_task 中提供可解析值，每个 literal.* 绑定都必须在 invocation "
+                "fixture.source_task.content 中提供可解析值，每个 literal.* 绑定必须直接在 "
+                "invocation 中提供（例如 literal.mode 对应 invocation.mode，不能再套 literal）；"
                 "中提供可执行值；每个 steps.* 绑定必须引用该 Skill 中真实存在且位于当前步骤"
                 "之前的前序步骤输出。不得省略必需绑定，也不得为不存在的前序步骤编造数据。"
-            ),
+            )
+        plan = self.model.generate(
+            TestPlan,
+            prompt,
             {"skill": skill},
         )
+        errors = _test_plan_binding_errors(skill, plan)
+        if not errors:
+            return plan
+        repaired = self.model.generate(
+            TestPlan,
+            (
+                f"{prompt}\n上一次测试计划违反执行协议，请重新生成完整计划：\n- "
+                + "\n- ".join(errors)
+            ),
+            {"skill": skill, "invalid_test_plan": plan},
+        )
+        remaining = _test_plan_binding_errors(skill, repaired)
+        if remaining:
+            raise ValueError(
+                "test plan violates Skill binding protocol: "
+                + "; ".join(remaining)
+            )
+        return repaired
 
     def compile_browser_skill(
         self,
@@ -736,6 +778,133 @@ def _validate_skill_tool_references(skill: SkillDefinition, catalog: Any) -> Non
         _catalog_tool_ids(catalog),
         "Tool",
     )
+
+
+def _skill_tool_contract_errors(
+    skill: SkillDefinition,
+    catalog: Any,
+) -> list[str]:
+    if not hasattr(catalog, "get"):
+        return []
+    errors: list[str] = []
+    declared_inputs = {item.name for item in skill.inputs}
+    prior_steps: dict[str, Any] = {}
+    for step in skill.steps:
+        tool = catalog.get(step.tool_id)
+        targets = set(step.input_bindings)
+        required_body = tool.body_schema.get("required", [])
+        if isinstance(required_body, list):
+            for name in required_body:
+                target = f"body.{name}"
+                if not any(
+                    bound == target or bound.startswith(f"{target}.")
+                    for bound in targets
+                ):
+                    errors.append(f"step {step.step_id}: missing {target}")
+        for parameter in tool.parameters:
+            if not parameter.required or parameter.location not in {
+                "query",
+                "path",
+                "body",
+            }:
+                continue
+            target = f"{parameter.location}.{parameter.name}"
+            if target not in targets:
+                errors.append(f"step {step.step_id}: missing {target}")
+        for expression in step.input_bindings.values():
+            if expression.startswith(("literal.", "task.content.")):
+                input_name = expression.split(".", 2)[-1].split(".", 1)[0]
+                if input_name not in declared_inputs:
+                    errors.append(
+                        f"step {step.step_id}: binding references undeclared Skill "
+                        f"input: {expression}"
+                    )
+            if not expression.startswith("steps."):
+                continue
+            parts = expression.split(".")
+            if len(parts) < 4 or parts[2] != "output":
+                errors.append(
+                    f"step {step.step_id}: invalid previous-step binding {expression}"
+                )
+                continue
+            source_tool = prior_steps.get(parts[1])
+            if source_tool is None:
+                errors.append(
+                    f"step {step.step_id}: unknown previous step in {expression}"
+                )
+                continue
+            response_path = parts[3:]
+            if source_tool.response_schema and not _schema_has_path(
+                source_tool.response_schema,
+                response_path,
+            ):
+                errors.append(
+                    f"step {step.step_id}: response path not in OpenAPI schema: "
+                    f"{expression}"
+                )
+        prior_steps[step.step_id] = tool
+    return errors
+
+
+def _schema_has_path(schema: dict[str, Any], path: list[str]) -> bool:
+    current: Any = schema
+    for part in path:
+        if not isinstance(current, dict):
+            return False
+        if current.get("type") == "array":
+            if not part.isdigit():
+                return False
+            current = current.get("items", {})
+            continue
+        properties = current.get("properties")
+        if not isinstance(properties, dict) or part not in properties:
+            return False
+        current = properties[part]
+    return True
+
+
+def _test_plan_binding_errors(
+    skill: SkillDefinition,
+    plan: TestPlan,
+) -> list[str]:
+    task_paths = {
+        expression.removeprefix("task.content.")
+        for step in skill.steps
+        for expression in step.input_bindings.values()
+        if expression.startswith("task.content.")
+    }
+    literal_paths = {
+        expression.removeprefix("literal.")
+        for step in skill.steps
+        for expression in step.input_bindings.values()
+        if expression.startswith("literal.")
+    }
+    errors: list[str] = []
+    for case in plan.cases:
+        source_task = case.fixture.get("source_task", {})
+        content = (
+            source_task.get("content", {})
+            if isinstance(source_task, dict)
+            else {}
+        )
+        for path in task_paths:
+            if not _mapping_has_path(content, path.split(".")):
+                errors.append(
+                    f"case {case.case_id}: missing fixture.source_task.content.{path}"
+                )
+        for path in literal_paths:
+            if not _mapping_has_path(case.invocation, path.split(".")):
+                errors.append(f"case {case.case_id}: missing invocation.{path}")
+    return errors
+
+
+def _mapping_has_path(value: Any, path: list[str]) -> bool:
+    current = value
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current[part]
+    return True
 
 
 def _validate_primary_system_coverage(

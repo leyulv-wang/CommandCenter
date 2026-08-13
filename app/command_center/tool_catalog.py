@@ -36,6 +36,7 @@ class ToolDefinition:
     side_effect: Literal["read", "write"] = "write"
     query_parameters: dict[str, ToolParameter] = field(default_factory=dict)
     body_schema: dict[str, Any] = field(default_factory=dict)
+    response_schema: dict[str, Any] = field(default_factory=dict)
     credential_header: str | None = None
     parameters: tuple[ToolParameter, ...] = ()
     max_response_bytes: int = 8 * 1024 * 1024
@@ -54,6 +55,7 @@ class ToolDefinition:
             side_effect=self.side_effect,
             query_parameters=self.query_parameters,
             body_schema=self.body_schema,
+            response_schema=self.response_schema,
             credential_header=self.credential_header,
             parameters=self.parameters,
             max_response_bytes=self.max_response_bytes,
@@ -160,6 +162,7 @@ class ToolCatalog:
                         for name, parameter in tool.query_parameters.items()
                     },
                     "body_schema": tool.body_schema,
+                    "response_schema": tool.response_schema,
                     "credential_header": tool.credential_header,
                     "parameters": [asdict(parameter) for parameter in tool.parameters],
                 }
@@ -262,6 +265,8 @@ def _tool_from_operation(
     parameter_items = _merged_parameter_items(path_item, operation)
     parameters = _tool_parameters(parameter_items)
     content_type, body_schema = _request_body(document, operation, parameter_items)
+    body_schema = _resolve_local_schema(document, body_schema)
+    response_schema = _success_response_schema(document, operation)
     return ToolDefinition(
         tool_id=f"{system_code}:{operation['operationId']}",
         system_code=system_code,
@@ -278,6 +283,7 @@ def _tool_from_operation(
             if parameter.location == "query"
         },
         body_schema=body_schema,
+        response_schema=response_schema,
         credential_header=credential_header,
         parameters=parameters,
         max_response_bytes=max_response_bytes,
@@ -343,6 +349,62 @@ def _request_body(
         next(iter(consumes), None) if body_parameter is not None or has_form_data else None
     )
     return content_type, body_parameter.get("schema", {}) if body_parameter else {}
+
+
+def _success_response_schema(
+    document: dict[str, Any],
+    operation: dict[str, Any],
+) -> dict[str, Any]:
+    responses = operation.get("responses", {})
+    for status, response in responses.items():
+        if not str(status).startswith("2") or not isinstance(response, dict):
+            continue
+        content = response.get("content", {})
+        if not isinstance(content, dict) or not content:
+            continue
+        media = content.get("application/json") or next(iter(content.values()), {})
+        if isinstance(media, dict):
+            return _resolve_local_schema(document, media.get("schema", {}))
+    return {}
+
+
+def _resolve_local_schema(
+    document: dict[str, Any],
+    schema: Any,
+    *,
+    seen: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    if not isinstance(schema, dict):
+        return {}
+    reference = schema.get("$ref")
+    if isinstance(reference, str) and reference.startswith("#/"):
+        if reference in seen:
+            return {"$ref": reference}
+        value: Any = document
+        try:
+            for part in reference[2:].split("/"):
+                value = value[part.replace("~1", "/").replace("~0", "~")]
+        except (KeyError, TypeError):
+            return {"$ref": reference}
+        return _resolve_local_schema(
+            document,
+            value,
+            seen=seen | {reference},
+        )
+    resolved: dict[str, Any] = {}
+    for key, value in schema.items():
+        if isinstance(value, dict):
+            resolved[key] = _resolve_local_schema(document, value, seen=seen)
+        elif isinstance(value, list):
+            resolved[key] = [
+                _resolve_local_schema(document, item, seen=seen)
+                if isinstance(item, dict)
+                else item
+                for item in value
+            ]
+        else:
+            resolved[key] = value
+    return resolved
 
 
 def _path_pattern(path_template: str) -> tuple[re.Pattern[str], list[str]]:

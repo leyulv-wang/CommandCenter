@@ -48,13 +48,34 @@ class CrossSystemSkillTestService:
         cleanup_status = "not_required"
         result: dict[str, Any]
         try:
+            execution_skill = skill.model_copy(deep=True)
+            for step in execution_skill.steps:
+                tool = self.catalog.get(step.tool_id)
+                if tool.system_code == "connected_system" and tool.side_effect == "write":
+                    step.input_bindings["body.record_purpose"] = (
+                        "task.content.record_purpose"
+                    )
+                    step.input_bindings.setdefault(
+                        "body.verification_run_id",
+                        "task.content.verification_run_id",
+                    )
             run = self.runner.run(
-                skill,
+                execution_skill,
                 task,
                 run_id=uuid4(),
                 literals=case.get("invocation", {}),
             )
-            if run.status != "succeeded":
+            runs = [run]
+            if category == "idempotency" and run.status == "succeeded":
+                runs.append(
+                    self.runner.run(
+                        execution_skill,
+                        task,
+                        run_id=uuid4(),
+                        literals=case.get("invocation", {}),
+                    )
+                )
+            if any(item.status != "succeeded" for item in runs):
                 result = self._failed(category, "cross-system execution failed")
                 return result
             local_write_steps = [
@@ -80,7 +101,11 @@ class CrossSystemSkillTestService:
             )
             response.raise_for_status()
             observed = response.json()
-            verification = self.verifier.verify_result(skill, run.step_results, observed)
+            verification = self.verifier.verify_result(
+                skill,
+                [step for item in runs for step in item.step_results],
+                observed,
+            )
             status = "passed" if verification.status == "passed" else "failed"
             result = {
                 "category": category,

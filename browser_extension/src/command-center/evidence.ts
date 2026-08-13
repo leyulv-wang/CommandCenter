@@ -365,16 +365,21 @@ function flattenScalarFields(value: unknown, path = ''): Array<[string, string]>
   if (value === null || value === undefined) return [];
   if (Array.isArray(value)) {
     return value.flatMap((item, index) =>
-      flattenScalarFields(item, path ? `${path}.${index}` : String(index)),
+      flattenScalarFields(item, appendJsonPointer(path, String(index))),
     );
   }
   if (typeof value === 'object') {
     return Object.entries(value as Record<string, unknown>).flatMap(([name, item]) =>
-      flattenScalarFields(item, path ? `${path}.${name}` : name),
+      flattenScalarFields(item, appendJsonPointer(path, name)),
     );
   }
   if (!['string', 'number', 'boolean'].includes(typeof value)) return [];
   return [[path, String(value)]];
+}
+
+function appendJsonPointer(path: string, segment: string): string {
+  const escaped = segment.replace(/~/g, '~0').replace(/\//g, '~1');
+  return `${path}/${escaped}`;
 }
 
 async function pageDescriptor(url: string, key: string): Promise<CommandCenterPageDescriptor | null> {

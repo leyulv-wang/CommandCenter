@@ -126,7 +126,7 @@ def executable_skill_set(
         except (KeyError, ValueError, httpx.HTTPError):
             continue
         if all(
-            step.side_effect == "read" and tool.side_effect == "read"
+            step.side_effect == tool.side_effect
             for step, tool in zip(skill.steps, tools, strict=True)
         ):
             verified.append(skill)

@@ -2,13 +2,19 @@ import { getBrowserAdapter } from '@/browser';
 import { collectEventDomains } from '@/shared/events';
 import { createId } from '@/shared/id';
 import { systemClock, type Clock } from '@/shared/time';
-import type { CapturedEvent, RecordingRow, TraceSummary } from '@/shared/types';
+import type {
+  CapturedEvent,
+  CaptureSettings,
+  RecordingRow,
+  TraceSummary,
+} from '@/shared/types';
 import { db, getConfig } from '@/storage/db';
 
 export async function startRecording(
   clock: Clock = systemClock,
   opts?: {
     label?: string;
+    captureOverrides?: Partial<CaptureSettings>;
     commandCenter?: NonNullable<RecordingRow['command_center']>;
   }
 ): Promise<RecordingRow> {
@@ -22,6 +28,7 @@ export async function startRecording(
   const adapter = getBrowserAdapter();
   const captureSettings = {
     ...config.capture,
+    ...opts?.captureOverrides,
     screenshots: false,
     video: adapter.capabilities.video && config.capture.video,
   };

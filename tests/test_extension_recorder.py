@@ -202,6 +202,10 @@ def test_multi_system_recorder_routes_events_into_one_ordered_trace():
         22,
     )
     local_network["method"] = "POST"
+    local_network["body_field_fingerprints"] = {
+        "/assignee": [FP],
+        "/items/0/material_code": [FP],
+    }
 
     target.ingest(
         recording_id,
@@ -230,6 +234,10 @@ def test_multi_system_recorder_routes_events_into_one_ordered_trace():
     ]
     assert trace.ui_events[0].target["system_code"] == "yifeng_mes"
     assert trace.ui_events[1].target["tab_id"] == 22
+    assert trace.api_exchanges[1].request_body["body_field_fingerprints"] == {
+        "/assignee": [FP],
+        "/items/0/material_code": [FP],
+    }
 
 
 def test_multi_system_recorder_rejects_mismatched_identity_and_origin():

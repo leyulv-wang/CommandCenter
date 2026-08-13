@@ -512,6 +512,29 @@ def test_purchase_follow_up_cleanup_requires_owned_automated_test_record(tmp_pat
     ).status_code == 404
 
 
+def test_purchase_follow_up_openapi_exposes_reusable_response_fields(tmp_path: Path):
+    app = create_external_app(
+        system_name="采购业务系统",
+        system_code="connected_system",
+        interface_type="workflow",
+        workflow_template_id="purchase_request_001",
+        database_path=tmp_path / "connected.sqlite3",
+        seed_records=[],
+        seed_tasks=[],
+    )
+
+    schema = TestClient(app).get("/openapi.json").json()
+    response_schema = schema["paths"]["/api/purchase-follow-ups"]["post"][
+        "responses"
+    ]["201"]["content"]["application/json"]["schema"]
+    model_name = response_schema["$ref"].rsplit("/", 1)[-1]
+    properties = schema["components"]["schemas"][model_name]["properties"]
+
+    assert "follow_up_id" in properties
+    assert "title" in properties
+    assert "items" in properties
+
+
 def test_automated_follow_up_requires_verification_run_id(tmp_path: Path):
     app = create_external_app(
         system_name="采购业务系统",

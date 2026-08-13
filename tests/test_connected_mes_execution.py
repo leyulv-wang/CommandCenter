@@ -169,7 +169,7 @@ def test_missing_required_agent_input_fails_before_tool_execution():
     assert result["errors"] == ["Skill 必填输入不完整"]
 
 
-def test_verified_write_candidate_is_excluded_from_employee_execution():
+def test_verified_write_candidate_is_available_to_employee_execution():
     read_skill = verified_query_skill()
     write_step = read_skill.steps[0].model_copy(
         update={
@@ -188,9 +188,9 @@ def test_verified_write_candidate_is_excluded_from_employee_execution():
                 base_url="https://mes.test",
                 path_template="/purchase/apply/list",
                 content_type=None,
-                side_effect="read",
+                side_effect="write",
             )
         ]
     )
 
-    assert executable_skill_set([], [write_skill], catalog) == []
+    assert executable_skill_set([], [write_skill], catalog) == [write_skill]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
@@ -65,7 +66,7 @@ class SkillRunner:
                     continue
                 _set_nested(
                     arguments,
-                    target.split("."),
+                    _binding_target_parts(target),
                     value,
                 )
             idempotency_key = None
@@ -224,8 +225,47 @@ class LocalFixtureService:
         }
 
 
+def _binding_target_parts(target: str) -> list[str]:
+    return [
+        part
+        for part in re.sub(r"\[(\d+)\]", r".\1", target).split(".")
+        if part
+    ]
+
+
 def _set_nested(target: dict[str, Any], path: list[str], value: Any) -> None:
-    current = target
-    for part in path[:-1]:
-        current = current.setdefault(part, {})
-    current[path[-1]] = value
+    current: dict[str, Any] | list[Any] = target
+    for index, part in enumerate(path):
+        last = index == len(path) - 1
+        numeric = part.isdigit()
+        if isinstance(current, list):
+            if not numeric:
+                raise ValueError(f"List binding segment must be numeric: {part}")
+            position = int(part)
+            while len(current) <= position:
+                current.append(None)
+            if last:
+                current[position] = value
+                return
+            want_list = path[index + 1].isdigit()
+            child = current[position]
+            if child is None:
+                child = [] if want_list else {}
+                current[position] = child
+            if not isinstance(child, (dict, list)):
+                raise ValueError(f"Binding path conflicts at segment: {part}")
+            current = child
+            continue
+        if numeric:
+            raise ValueError(f"Numeric binding segment requires a list: {part}")
+        if last:
+            current[part] = value
+            return
+        want_list = path[index + 1].isdigit()
+        child = current.get(part)
+        if child is None:
+            child = [] if want_list else {}
+            current[part] = child
+        if not isinstance(child, (dict, list)):
+            raise ValueError(f"Binding path conflicts at segment: {part}")
+        current = child

@@ -289,6 +289,59 @@ def test_swagger2_operation_body_parameter_overrides_path_level_schema():
     assert tool.body_schema == {"type": "object", "required": ["current"]}
 
 
+def test_openapi3_resolves_local_request_and_success_response_schemas():
+    path = "/api/follow-ups"
+    profile = profile_for("POST", path, side_effect="write")
+    document = {
+        "openapi": "3.1.0",
+        "paths": {
+            path: {
+                "post": {
+                    "operationId": "createFollowUp",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/CreateFollowUp"}
+                            }
+                        }
+                    },
+                    "responses": {
+                        "201": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/FollowUp"}
+                                }
+                            }
+                        }
+                    },
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                "CreateFollowUp": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {"title": {"type": "string"}},
+                },
+                "FollowUp": {
+                    "type": "object",
+                    "required": ["follow_up_id"],
+                    "properties": {"follow_up_id": {"type": "string"}},
+                },
+            }
+        },
+    }
+
+    tool = ToolCatalog.from_system_profile(document, profile).get(
+        "yifeng_mes:createFollowUp"
+    )
+
+    assert tool.body_schema["required"] == ["title"]
+    assert tool.response_schema["required"] == ["follow_up_id"]
+    assert tool.response_schema["properties"]["follow_up_id"]["type"] == "string"
+
+
 def test_catalog_matches_only_explicitly_allowlisted_operations():
     document = {
         "paths": {

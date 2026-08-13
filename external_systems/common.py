@@ -64,6 +64,17 @@ class PurchaseFollowUpRequest(BaseModel):
         return self
 
 
+class PurchaseFollowUpRecord(BaseModel):
+    follow_up_id: str
+    title: str
+    items: list[PurchaseFollowUpItem]
+    source_reference: str | None = None
+    remark: str = ""
+    record_purpose: Literal["formal", "automated_test"]
+    verification_run_id: str | None = None
+    created_at: str
+
+
 def create_external_app(
     *,
     system_name: str,
@@ -145,7 +156,11 @@ def create_external_app(
             "items": [_purchase_follow_up_row(row) for row in rows],
         }
 
-    @app.post("/api/purchase-follow-ups", status_code=201)
+    @app.post(
+        "/api/purchase-follow-ups",
+        status_code=201,
+        response_model=PurchaseFollowUpRecord,
+    )
     def create_purchase_follow_up(
         request: PurchaseFollowUpRequest,
         idempotency_key: str = Header(alias="Idempotency-Key"),
@@ -203,7 +218,10 @@ def create_external_app(
             connection.commit()
             return response
 
-    @app.get("/api/purchase-follow-ups/{follow_up_id}")
+    @app.get(
+        "/api/purchase-follow-ups/{follow_up_id}",
+        response_model=PurchaseFollowUpRecord,
+    )
     def get_purchase_follow_up(follow_up_id: str) -> dict[str, object]:
         with _connect(database_path) as connection:
             row = connection.execute(

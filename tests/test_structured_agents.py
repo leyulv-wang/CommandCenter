@@ -13,7 +13,7 @@ from app.command_center.schemas import (
     SkillDefinition,
     TestPlan as SkillTestPlan,
 )
-from app.command_center.tool_catalog import ToolCatalog
+from app.command_center.tool_catalog import ToolCatalog, ToolDefinition
 from tests.test_command_center_schemas import valid_skill_payload
 
 
@@ -76,7 +76,11 @@ class SchemaAwareModel:
                             "case_id": category,
                             "category": category,
                             "description": category,
-                            "fixture": {},
+                            "fixture": {
+                                "source_task": {
+                                    "content": {"item_name": "测试物料"}
+                                }
+                            },
                             "invocation": {},
                             "expected": {},
                         }
@@ -126,7 +130,11 @@ class PromptCapturingModel:
                             "case_id": category,
                             "category": category,
                             "description": category,
-                            "fixture": {},
+                            "fixture": {
+                                "source_task": {
+                                    "content": {"item_name": "测试物料"}
+                                }
+                            },
                             "invocation": {},
                             "expected": {},
                         }
@@ -170,6 +178,64 @@ def test_test_design_agent_places_every_binding_namespace_in_executable_context(
     assert "invocation" in prompt
     assert "steps.*" in prompt
     assert "前序步骤" in prompt
+
+
+class PlanRepairModel:
+    def __init__(self):
+        self.calls = []
+
+    def generate(self, schema, system_prompt, payload):
+        self.calls.append(system_prompt)
+        skill = payload["skill"]
+        source_task = (
+            {"content": {"item_name": "测试物料"}}
+            if len(self.calls) == 2
+            else {"item_name": "测试物料"}
+        )
+        invocation = (
+            {"mode": "formal"}
+            if len(self.calls) == 2
+            else {"literal": {"mode": "formal"}}
+        )
+        return schema.model_validate(
+            {
+                "skill_id": str(skill.skill_id),
+                "skill_version": skill.version,
+                "cases": [
+                    {
+                        "case_id": category,
+                        "category": category,
+                        "description": category,
+                        "fixture": {"source_task": source_task},
+                        "invocation": invocation,
+                        "expected": {},
+                    }
+                    for category in (
+                        "normal",
+                        "parameter_variation",
+                        "idempotency",
+                    )
+                ],
+            }
+        )
+
+
+def test_test_design_agent_repairs_fixture_and_literal_namespaces():
+    skill = SkillDefinition.model_validate(valid_skill_payload())
+    skill.steps[0].input_bindings = {
+        "body.item_name": "task.content.item_name",
+        "body.mode": "literal.mode",
+    }
+    model = PlanRepairModel()
+
+    plan = AgentSuite(model).design_tests(skill)
+
+    assert len(model.calls) == 2
+    assert plan.cases[0].fixture["source_task"]["content"]["item_name"] == (
+        "测试物料"
+    )
+    assert plan.cases[0].invocation == {"mode": "formal"}
+    assert "fixture.source_task.content" in model.calls[1]
 
 
 def test_analysis_and_compilation_agents_share_generic_binding_protocol():
@@ -357,6 +423,266 @@ class CrossSystemCompileModel:
         candidate["steps"][0]["side_effect"] = "read"
         candidate["steps"][0]["idempotency_key_template"] = None
         return schema.model_validate(candidate)
+
+
+class ContractRepairCompileModel:
+    def __init__(self):
+        self.calls = []
+
+    def generate(self, schema, system_prompt, payload):
+        self.calls.append((system_prompt, payload))
+        candidate = valid_skill_payload()
+        candidate["steps"][0]["tool_id"] = "connected_system:createFollowUp"
+        candidate["steps"][0]["input_bindings"] = {
+            "body.items.0.material_code": "task.content.item_name"
+        }
+        if len(self.calls) == 2:
+            candidate["inputs"].append(
+                {
+                    "name": "title",
+                    "type": "string",
+                    "description": "跟进任务标题",
+                    "required": True,
+                }
+            )
+            candidate["steps"][0]["input_bindings"]["body.title"] = (
+                "task.content.title"
+            )
+        return schema.model_validate(candidate)
+
+
+def test_compilation_agent_repairs_missing_openapi_required_binding():
+    model = ContractRepairCompileModel()
+    agents = AgentSuite(model)
+    catalog = ToolCatalog(
+        [
+            ToolDefinition(
+                tool_id="connected_system:createFollowUp",
+                system_code="connected_system",
+                operation_id="createFollowUp",
+                method="POST",
+                base_url="http://local.test",
+                path_template="/api/purchase-follow-ups",
+                content_type="application/json",
+                side_effect="write",
+                body_schema={
+                    "type": "object",
+                    "required": ["title", "items"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "items": {"type": "array"},
+                    },
+                },
+            )
+        ]
+    )
+    attribution = APIAttributionAnalysis.model_validate(
+        {
+            "segments": [
+                {
+                    "segment_id": "local_write",
+                    "primary_tool_ids": ["connected_system:createFollowUp"],
+                    "evidence_summary": "创建采购跟进任务",
+                }
+            ],
+            "attributable": True,
+        }
+    )
+
+    skill = agents.compile_skill(
+        FieldMappingAnalysis.model_validate(
+            {"mappings": [], "uncertainties": [], "compilable": True}
+        ),
+        attribution,
+        {"api_exchanges": []},
+        catalog,
+    )
+
+    assert len(model.calls) == 2
+    assert skill.steps[0].input_bindings["body.title"] == "task.content.title"
+    assert "OpenAPI" in model.calls[1][0]
+    assert "body.title" in model.calls[1][0]
+
+
+class ResponsePathRepairCompileModel:
+    def __init__(self):
+        self.calls = []
+
+    def generate(self, schema, system_prompt, payload):
+        self.calls.append(system_prompt)
+        candidate = valid_skill_payload()
+        candidate["inputs"].append(
+            {
+                "name": "title",
+                "type": "string",
+                "description": "跟进任务标题",
+                "required": True,
+            }
+        )
+        candidate["steps"] = [
+            {
+                "step_id": "create",
+                "name": "创建",
+                "tool_id": "connected_system:createFollowUp",
+                "input_bindings": {"body.title": "task.content.title"},
+                "side_effect": "write",
+                "idempotency_key_template": "fixed",
+            },
+            {
+                "step_id": "verify",
+                "name": "验证",
+                "tool_id": "connected_system:getFollowUp",
+                "input_bindings": {
+                    "path.follow_up_id": (
+                        "steps.create.output.follow_up_id"
+                        if len(self.calls) == 2
+                        else "steps.create.output.data.id"
+                    )
+                },
+                "side_effect": "read",
+            },
+        ]
+        return schema.model_validate(candidate)
+
+
+def test_compilation_agent_repairs_unknown_previous_step_response_path():
+    model = ResponsePathRepairCompileModel()
+    agents = AgentSuite(model)
+    catalog = ToolCatalog(
+        [
+            ToolDefinition(
+                tool_id="connected_system:createFollowUp",
+                system_code="connected_system",
+                operation_id="createFollowUp",
+                method="POST",
+                base_url="http://local.test",
+                path_template="/api/follow-ups",
+                content_type="application/json",
+                side_effect="write",
+                body_schema={
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {"title": {"type": "string"}},
+                },
+                response_schema={
+                    "type": "object",
+                    "properties": {"follow_up_id": {"type": "string"}},
+                },
+            ),
+            ToolDefinition(
+                tool_id="connected_system:getFollowUp",
+                system_code="connected_system",
+                operation_id="getFollowUp",
+                method="GET",
+                base_url="http://local.test",
+                path_template="/api/follow-ups/{follow_up_id}",
+                content_type=None,
+                side_effect="read",
+            ),
+        ]
+    )
+    attribution = APIAttributionAnalysis.model_validate(
+        {
+            "segments": [
+                {
+                    "segment_id": "local",
+                    "primary_tool_ids": ["connected_system:createFollowUp"],
+                    "verification_tool_ids": ["connected_system:getFollowUp"],
+                    "evidence_summary": "创建并验证",
+                }
+            ],
+            "attributable": True,
+        }
+    )
+
+    skill = agents.compile_skill(
+        FieldMappingAnalysis.model_validate(
+            {"mappings": [], "uncertainties": [], "compilable": True}
+        ),
+        attribution,
+        {"api_exchanges": []},
+        catalog,
+    )
+
+    assert len(model.calls) == 2
+    assert skill.steps[1].input_bindings["path.follow_up_id"] == (
+        "steps.create.output.follow_up_id"
+    )
+    assert "data.id" in model.calls[1]
+
+
+class UndeclaredLiteralRepairCompileModel:
+    def __init__(self):
+        self.calls = []
+
+    def generate(self, schema, system_prompt, payload):
+        self.calls.append(system_prompt)
+        candidate = valid_skill_payload()
+        candidate["steps"][0]["tool_id"] = "connected_system:createFollowUp"
+        candidate["steps"][0]["input_bindings"] = {
+            "body.title": "task.content.item_name",
+            "body.record_purpose": (
+                "task.content.record_purpose"
+                if len(self.calls) == 2
+                else "literal.formal"
+            ),
+        }
+        if len(self.calls) == 2:
+            candidate["inputs"].append(
+                {
+                    "name": "record_purpose",
+                    "type": "string",
+                    "description": "记录用途",
+                    "required": False,
+                }
+            )
+        return schema.model_validate(candidate)
+
+
+def test_compilation_agent_repairs_undeclared_literal_binding():
+    model = UndeclaredLiteralRepairCompileModel()
+    agents = AgentSuite(model)
+    catalog = ToolCatalog(
+        [
+            ToolDefinition(
+                tool_id="connected_system:createFollowUp",
+                system_code="connected_system",
+                operation_id="createFollowUp",
+                method="POST",
+                base_url="http://local.test",
+                path_template="/api/follow-ups",
+                content_type="application/json",
+                side_effect="write",
+            )
+        ]
+    )
+    attribution = APIAttributionAnalysis.model_validate(
+        {
+            "segments": [
+                {
+                    "segment_id": "local",
+                    "primary_tool_ids": ["connected_system:createFollowUp"],
+                    "evidence_summary": "创建跟进任务",
+                }
+            ],
+            "attributable": True,
+        }
+    )
+
+    skill = agents.compile_skill(
+        FieldMappingAnalysis.model_validate(
+            {"mappings": [], "uncertainties": [], "compilable": True}
+        ),
+        attribution,
+        {"api_exchanges": []},
+        catalog,
+    )
+
+    assert len(model.calls) == 2
+    assert skill.steps[0].input_bindings["body.record_purpose"] == (
+        "task.content.record_purpose"
+    )
+    assert "literal.formal" in model.calls[1]
 
 
 def test_cross_system_compilation_requires_each_primary_system_in_skill():

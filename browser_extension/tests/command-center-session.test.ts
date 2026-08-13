@@ -83,6 +83,7 @@ describe('CommandCenter session coordinator', () => {
     expect(calls).toEqual(['remote:create', 'remote:start', 'local:start']);
     expect(startLocal).toHaveBeenCalledWith({
       label: '查询采购申请',
+      captureOverrides: { networkBodies: true },
       commandCenter: {
         base_url: 'http://127.0.0.1:8000',
         system_code: 'yifeng_mes',
@@ -123,6 +124,7 @@ describe('CommandCenter session coordinator', () => {
       recordingMode: 'multi_system',
     });
     expect(startLocal).toHaveBeenCalledWith(expect.objectContaining({
+      captureOverrides: { networkBodies: true },
       commandCenter: expect.objectContaining({
         recording_kind: 'multi_system',
         system_codes: ['yifeng_mes', 'connected_system'],

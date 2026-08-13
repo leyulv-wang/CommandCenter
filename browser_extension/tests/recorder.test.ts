@@ -232,6 +232,23 @@ describe('recorder lifecycle', () => {
     expect(row.envelope.label).toBe('book a flight');
   });
 
+  it('applies session capture overrides without changing global defaults', async () => {
+    stubChromeRuntime();
+    await setConfig({
+      endpoint_url: 'https://api.example.test',
+      api_key: 'key_capture_override',
+      capture: { ...DEFAULT_CONFIG.capture, networkBodies: false },
+    });
+
+    const row = await startRecording(
+      fixedClock(100, '2026-06-03T00:00:00.100Z'),
+      { captureOverrides: { networkBodies: true } },
+    );
+
+    expect(row.envelope.capture_settings?.networkBodies).toBe(true);
+    expect((await db.config.get('singleton'))?.capture.networkBodies).toBe(false);
+  });
+
   it('requires endpoint config before starting a recording', async () => {
     stubChromeRuntime();
     await db.config.put({ ...DEFAULT_CONFIG, endpoint_url: '', api_key: '' });

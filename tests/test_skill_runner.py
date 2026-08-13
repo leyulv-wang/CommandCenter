@@ -167,3 +167,75 @@ def test_skill_runner_omits_unprovided_optional_inputs_from_tool_arguments():
     assert executor.commands[0].arguments == {
         "query": {"pageNo": 1, "pageSize": 10}
     }
+
+
+def test_skill_runner_builds_lists_from_numeric_binding_segments():
+    skill = two_step_skill()
+    skill.steps = [skill.steps[0]]
+    skill.steps[0].input_bindings = {
+        "body.items.0.material_code": "task.content.first_code",
+        "body.items.0.quantity": "task.content.first_quantity",
+        "body.items.1.material_code": "task.content.second_code",
+        "body.items.1.quantity": "task.content.second_quantity",
+    }
+    executor = RecordingExecutor()
+
+    SkillRunner(executor).run(
+        skill,
+        {
+            "system_code": "connected_system",
+            "task_id": "array-binding-test",
+            "content": {
+                "first_code": "M001",
+                "first_quantity": 100,
+                "second_code": "M002",
+                "second_quantity": 50,
+            },
+        },
+        run_id=uuid4(),
+    )
+
+    assert executor.commands[0].arguments == {
+        "body": {
+            "items": [
+                {"material_code": "M001", "quantity": 100},
+                {"material_code": "M002", "quantity": 50},
+            ]
+        }
+    }
+
+
+def test_skill_runner_builds_lists_from_bracketed_binding_segments():
+    skill = two_step_skill()
+    skill.steps = [skill.steps[0]]
+    skill.steps[0].input_bindings = {
+        "body.items[0].material_code": "task.content.first_code",
+        "body.items[0].quantity": "task.content.first_quantity",
+        "body.items[1].material_code": "task.content.second_code",
+        "body.items[1].quantity": "task.content.second_quantity",
+    }
+    executor = RecordingExecutor()
+
+    SkillRunner(executor).run(
+        skill,
+        {
+            "system_code": "connected_system",
+            "task_id": "bracket-array-binding-test",
+            "content": {
+                "first_code": "M001",
+                "first_quantity": 100,
+                "second_code": "M002",
+                "second_quantity": 50,
+            },
+        },
+        run_id=uuid4(),
+    )
+
+    assert executor.commands[0].arguments == {
+        "body": {
+            "items": [
+                {"material_code": "M001", "quantity": 100},
+                {"material_code": "M002", "quantity": 50},
+            ]
+        }
+    }

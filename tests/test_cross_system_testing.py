@@ -60,9 +60,13 @@ def catalog(mes_side_effect="read") -> ToolCatalog:
 class Runner:
     def __init__(self):
         self.task = None
+        self.skill = None
+        self.calls = 0
 
     def run(self, skill, task, *, run_id, literals=None):
+        self.calls += 1
         self.task = task
+        self.skill = skill
         return SkillRunResult(
             "succeeded",
             [],
@@ -122,3 +126,55 @@ def test_cross_system_test_rejects_write_tool_outside_local_test_system():
 
     assert result["status"] == "failed"
     assert result["cleanup_status"] == "not_required"
+
+
+def test_cross_system_test_injects_cleanup_ownership_into_execution_copy():
+    skill = cross_system_skill()
+    skill.steps[1].input_bindings.pop("body.verification_run_id")
+    runner = Runner()
+    service = CrossSystemSkillTestService(
+        catalog=catalog(), runner=runner, verifier=Verifier(), client=Client(),
+        local_base_url="http://local.test",
+    )
+
+    result = service.run(skill, {"category": "normal"})
+
+    assert result["status"] == "passed"
+    assert runner.skill.steps[1].input_bindings["body.verification_run_id"] == (
+        "task.content.verification_run_id"
+    )
+    assert "body.verification_run_id" not in skill.steps[1].input_bindings
+
+
+def test_cross_system_test_forces_automated_test_record_purpose():
+    skill = cross_system_skill()
+    skill.steps[1].input_bindings["body.record_purpose"] = "literal.formal"
+    runner = Runner()
+    service = CrossSystemSkillTestService(
+        catalog=catalog(), runner=runner, verifier=Verifier(), client=Client(),
+        local_base_url="http://local.test",
+    )
+
+    result = service.run(
+        skill,
+        {"category": "normal", "invocation": {"formal": "formal"}},
+    )
+
+    assert result["status"] == "passed"
+    assert runner.skill.steps[1].input_bindings["body.record_purpose"] == (
+        "task.content.record_purpose"
+    )
+    assert skill.steps[1].input_bindings["body.record_purpose"] == "literal.formal"
+
+
+def test_cross_system_idempotency_case_executes_skill_twice():
+    runner = Runner()
+    service = CrossSystemSkillTestService(
+        catalog=catalog(), runner=runner, verifier=Verifier(), client=Client(),
+        local_base_url="http://local.test",
+    )
+
+    result = service.run(cross_system_skill(), {"category": "idempotency"})
+
+    assert result["status"] == "passed"
+    assert runner.calls == 2

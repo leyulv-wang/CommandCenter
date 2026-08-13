@@ -146,14 +146,14 @@ describe('CommandCenter evidence converter', () => {
 
     expect(exchange).toMatchObject({
       body_field_fingerprints: {
-        'title': [expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/)],
-        'items.0.material_code': [expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/)],
-        'items.0.quantity': [expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/)],
+        '/title': [expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/)],
+        '/items/0/material_code': [expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/)],
+        '/items/0/quantity': [expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/)],
       },
     });
     expect(input?.value_fingerprint).toBe(
       exchange && 'body_field_fingerprints' in exchange
-        ? exchange.body_field_fingerprints?.['items.0.material_code']?.[0]
+        ? exchange.body_field_fingerprints?.['/items/0/material_code']?.[0]
         : undefined,
     );
     expect(JSON.stringify(batch)).not.toContain('LCF4607A');

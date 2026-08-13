@@ -7,11 +7,13 @@ import type { CommandCenterProfile } from '@/command-center/config';
 import { startRecording, stopRecording } from '@/recording/recorder';
 import { db } from '@/storage/db';
 import type { RecordingRow } from '@/shared/types';
+import type { CaptureSettings } from '@/shared/types';
 import { systemClock } from '@/shared/time';
 import { commandCenterUploadRunner } from '@/command-center/upload';
 
 type StartLocal = (options: {
   label: string;
+  captureOverrides?: Partial<CaptureSettings>;
   commandCenter: NonNullable<RecordingRow['command_center']>;
 }) => Promise<RecordingRow>;
 
@@ -74,6 +76,9 @@ export function createCommandCenterSessionCoordinator(
       );
       return await startLocal({
         label: objective,
+        captureOverrides: {
+          networkBodies: profiles.some((profile) => profile.captureNetworkBodies),
+        },
         commandCenter: {
           base_url: commandCenterUrl,
           system_code: primaryProfile.systemCode,
