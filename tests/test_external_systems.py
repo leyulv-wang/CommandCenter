@@ -395,6 +395,124 @@ def test_purchase_request_creates_one_idempotent_u002_approval_task(tmp_path: Pa
     }
 
 
+def test_purchase_follow_up_is_created_idempotently_and_can_be_read(tmp_path: Path):
+    app = create_external_app(
+        system_name="采购业务系统",
+        system_code="connected_system",
+        interface_type="workflow",
+        workflow_template_id="purchase_request_001",
+        database_path=tmp_path / "connected.sqlite3",
+        seed_records=[],
+        seed_tasks=[],
+    )
+    client = TestClient(app)
+    payload = {
+        "mes_apply_no": "CGSQ26032701",
+        "material": "LS 7056AB",
+        "quantity": 19008,
+        "applicant": "孟明佳",
+        "remark": "跨系统联合录制演示",
+        "record_purpose": "formal",
+    }
+    headers = {"Idempotency-Key": "follow-up:CGSQ26032701"}
+
+    first = client.post("/api/purchase-follow-ups", json=payload, headers=headers)
+    second = client.post("/api/purchase-follow-ups", json=payload, headers=headers)
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert second.json() == first.json()
+    follow_up_id = first.json()["follow_up_id"]
+    assert first.json()["record_purpose"] == "formal"
+    assert client.get(f"/api/purchase-follow-ups/{follow_up_id}").json() == first.json()
+
+
+def test_purchase_follow_up_cleanup_requires_owned_automated_test_record(tmp_path: Path):
+    app = create_external_app(
+        system_name="采购业务系统",
+        system_code="connected_system",
+        interface_type="workflow",
+        workflow_template_id="purchase_request_001",
+        database_path=tmp_path / "connected.sqlite3",
+        seed_records=[],
+        seed_tasks=[],
+    )
+    client = TestClient(app)
+    base = {
+        "mes_apply_no": "CGSQ26032701",
+        "material": "LS 7056AB",
+        "quantity": 19008,
+        "applicant": "孟明佳",
+        "remark": "自动验证",
+    }
+    formal = client.post(
+        "/api/purchase-follow-ups",
+        json={**base, "record_purpose": "formal"},
+        headers={"Idempotency-Key": "formal-follow-up"},
+    ).json()
+    test_record = client.post(
+        "/api/purchase-follow-ups",
+        json={
+            **base,
+            "record_purpose": "automated_test",
+            "verification_run_id": "verify-run-1",
+        },
+        headers={"Idempotency-Key": "test-follow-up"},
+    ).json()
+
+    protected = client.delete(
+        f"/api/purchase-follow-ups/{formal['follow_up_id']}",
+        headers={"X-Verification-Run-Id": "verify-run-1"},
+    )
+    wrong_owner = client.delete(
+        f"/api/purchase-follow-ups/{test_record['follow_up_id']}",
+        headers={"X-Verification-Run-Id": "verify-run-other"},
+    )
+    deleted = client.delete(
+        f"/api/purchase-follow-ups/{test_record['follow_up_id']}",
+        headers={"X-Verification-Run-Id": "verify-run-1"},
+    )
+
+    assert protected.status_code == 409
+    assert wrong_owner.status_code == 409
+    assert deleted.status_code == 200
+    assert deleted.json() == {
+        "deleted": True,
+        "follow_up_id": test_record["follow_up_id"],
+    }
+    assert client.get(
+        f"/api/purchase-follow-ups/{test_record['follow_up_id']}"
+    ).status_code == 404
+
+
+def test_automated_follow_up_requires_verification_run_id(tmp_path: Path):
+    app = create_external_app(
+        system_name="采购业务系统",
+        system_code="connected_system",
+        interface_type="workflow",
+        workflow_template_id="purchase_request_001",
+        database_path=tmp_path / "connected.sqlite3",
+        seed_records=[],
+        seed_tasks=[],
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/purchase-follow-ups",
+        json={
+            "mes_apply_no": "CGSQ26032701",
+            "material": "LS 7056AB",
+            "quantity": 1,
+            "applicant": "孟明佳",
+            "remark": "自动验证",
+            "record_purpose": "automated_test",
+        },
+        headers={"Idempotency-Key": "invalid-test-follow-up"},
+    )
+
+    assert response.status_code == 422
+
+
 def test_office_task_links_purchase_request_idempotently(tmp_path: Path):
     app = create_external_app(
         system_name="办公用品系统",

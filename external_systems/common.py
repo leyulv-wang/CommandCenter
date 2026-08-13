@@ -9,7 +9,7 @@ from typing import Any, Literal
 from fastapi import FastAPI, Form, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 SeedRecord = dict[str, Any]
@@ -32,6 +32,26 @@ class PurchaseRequest(BaseModel):
     item_name: str
     quantity: int
     reason: str
+
+
+class PurchaseFollowUpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mes_apply_no: str = Field(min_length=1, max_length=128)
+    material: str = Field(min_length=1, max_length=300)
+    quantity: float = Field(gt=0)
+    applicant: str = Field(min_length=1, max_length=128)
+    remark: str = Field(default="", max_length=1_000)
+    record_purpose: Literal["formal", "automated_test"] = "formal"
+    verification_run_id: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def require_verification_owner_for_test_record(self):
+        if self.record_purpose == "automated_test" and not self.verification_run_id:
+            raise ValueError("automated test follow-up requires verification_run_id")
+        if self.record_purpose == "formal" and self.verification_run_id is not None:
+            raise ValueError("formal follow-up must not have verification_run_id")
+        return self
 
 
 def create_external_app(
@@ -103,6 +123,103 @@ def create_external_app(
                 for row in rows
             ],
         }
+
+    @app.get("/api/purchase-follow-ups")
+    def list_purchase_follow_ups() -> dict[str, object]:
+        with _connect(database_path) as connection:
+            rows = connection.execute(
+                "select * from purchase_follow_ups order by id desc"
+            ).fetchall()
+        return {
+            "system_name": system_name,
+            "items": [_purchase_follow_up_row(row) for row in rows],
+        }
+
+    @app.post("/api/purchase-follow-ups", status_code=201)
+    def create_purchase_follow_up(
+        request: PurchaseFollowUpRequest,
+        idempotency_key: str = Header(alias="Idempotency-Key"),
+    ) -> dict[str, object]:
+        with _connect(database_path) as connection:
+            existing = _load_idempotent_response(
+                connection,
+                "create_purchase_follow_up",
+                idempotency_key,
+            )
+            if existing is not None:
+                return existing
+            created_at = datetime.now().isoformat(timespec="seconds")
+            cursor = connection.execute(
+                """
+                insert into purchase_follow_ups(
+                    mes_apply_no, material, quantity, applicant, remark,
+                    record_purpose, verification_run_id, created_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request.mes_apply_no,
+                    request.material,
+                    request.quantity,
+                    request.applicant,
+                    request.remark,
+                    request.record_purpose,
+                    request.verification_run_id,
+                    created_at,
+                ),
+            )
+            follow_up_id = f"FOLLOW-UP-{cursor.lastrowid:04d}"
+            connection.execute(
+                "update purchase_follow_ups set follow_up_id = ? where id = ?",
+                (follow_up_id, cursor.lastrowid),
+            )
+            row = connection.execute(
+                "select * from purchase_follow_ups where id = ?",
+                (cursor.lastrowid,),
+            ).fetchone()
+            response = _purchase_follow_up_row(row)
+            _store_idempotent_response(
+                connection,
+                "create_purchase_follow_up",
+                idempotency_key,
+                response,
+            )
+            connection.commit()
+            return response
+
+    @app.get("/api/purchase-follow-ups/{follow_up_id}")
+    def get_purchase_follow_up(follow_up_id: str) -> dict[str, object]:
+        with _connect(database_path) as connection:
+            row = connection.execute(
+                "select * from purchase_follow_ups where follow_up_id = ?",
+                (follow_up_id,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="采购跟进任务不存在")
+        return _purchase_follow_up_row(row)
+
+    @app.delete("/api/purchase-follow-ups/{follow_up_id}")
+    def delete_purchase_follow_up(
+        follow_up_id: str,
+        verification_run_id: str = Header(alias="X-Verification-Run-Id"),
+    ) -> dict[str, object]:
+        with _connect(database_path) as connection:
+            row = connection.execute(
+                "select * from purchase_follow_ups where follow_up_id = ?",
+                (follow_up_id,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="采购跟进任务不存在")
+            if (
+                row["record_purpose"] != "automated_test"
+                or row["verification_run_id"] != verification_run_id
+            ):
+                raise HTTPException(status_code=409, detail="只允许清理当前验证运行创建的测试任务")
+            connection.execute(
+                "delete from purchase_follow_ups where follow_up_id = ?",
+                (follow_up_id,),
+            )
+            connection.commit()
+        return {"deleted": True, "follow_up_id": follow_up_id}
 
     @app.post("/api/forms/submit")
     def submit_form(
@@ -534,6 +651,7 @@ def create_external_app(
                     ),
                 )
             connection.execute("delete from tasks")
+            connection.execute("delete from purchase_follow_ups")
             connection.execute("delete from idempotency_records")
             for task in seed_tasks:
                 _insert_seed_task(connection, task)
@@ -572,6 +690,22 @@ def _initialize_database(
                 source text not null,
                 endpoint_type text not null default 'custom_url',
                 fd_template_id text,
+                created_at text not null
+            )
+            """
+        )
+        connection.execute(
+            """
+            create table if not exists purchase_follow_ups (
+                id integer primary key autoincrement,
+                follow_up_id text unique,
+                mes_apply_no text not null,
+                material text not null,
+                quantity real not null,
+                applicant text not null,
+                remark text not null,
+                record_purpose text not null,
+                verification_run_id text,
                 created_at text not null
             )
             """
@@ -684,6 +818,21 @@ def _task_row_to_dict(row: sqlite3.Row) -> dict[str, object]:
         "result_values": json.loads(row["result_values"]) if row["result_values"] else None,
         "created_at": row["created_at"],
         "completed_at": row["completed_at"],
+    }
+
+
+def _purchase_follow_up_row(row: sqlite3.Row) -> dict[str, object]:
+    quantity = row["quantity"]
+    return {
+        "follow_up_id": row["follow_up_id"],
+        "mes_apply_no": row["mes_apply_no"],
+        "material": row["material"],
+        "quantity": int(quantity) if float(quantity).is_integer() else quantity,
+        "applicant": row["applicant"],
+        "remark": row["remark"],
+        "record_purpose": row["record_purpose"],
+        "verification_run_id": row["verification_run_id"],
+        "created_at": row["created_at"],
     }
 
 

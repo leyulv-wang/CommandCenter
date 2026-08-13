@@ -55,10 +55,11 @@ async function refreshStatus() {
 }
 
 async function refreshData() {
-  const [pending, completed, submissions, spec] = await Promise.all([
+  const [pending, completed, submissions, followUps, spec] = await Promise.all([
     request('/api/tasks?operator_id=u001&status=pending'),
     request('/api/tasks?operator_id=u001&status=completed'),
     request('/api/submissions'),
+    request('/api/purchase-follow-ups'),
     request('/api/interface-spec'),
   ])
   renderList('pending-list', pending.items)
@@ -68,9 +69,37 @@ async function refreshData() {
     .join('')
   renderList('completed-list', completed.items, true)
   renderList('submission-list', submissions.items)
+  renderFollowUps(followUps.items)
   byId('task-count').textContent = String(pending.items.length + completed.items.length)
   byId('interface-description').textContent = spec.description
   await refreshStatus()
+}
+
+function renderFollowUps(items) {
+  byId('purchase-follow-up-list').innerHTML = items.length
+    ? items.map((item) => `<article class="record"><strong>${escapeHtml(item.follow_up_id)}</strong><p>MES 申请：${escapeHtml(item.mes_apply_no)}</p><p>物料：${escapeHtml(item.material)}</p><p>数量：${escapeHtml(item.quantity)}</p><p>申请人：${escapeHtml(item.applicant)}</p></article>`).join('')
+    : '<div class="empty">暂无采购跟进任务</div>'
+}
+
+async function createPurchaseFollowUp(event) {
+  event.preventDefault()
+  const response = await request('/api/purchase-follow-ups', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': idempotencyKey('create-purchase-follow-up'),
+    },
+    body: JSON.stringify({
+      mes_apply_no: byId('follow-up-mes-apply-no').value,
+      material: byId('follow-up-material').value,
+      quantity: Number(byId('follow-up-quantity').value),
+      applicant: byId('follow-up-applicant').value,
+      remark: byId('follow-up-remark').value,
+      record_purpose: 'formal',
+    }),
+  })
+  byId('purchase-follow-up-result').textContent = `跟进任务：${response.follow_up_id}`
+  await refreshData()
 }
 
 async function refreshSubmissions() {
@@ -171,8 +200,10 @@ async function init() {
     : 'Custom URL Business System'
   byId('task-form').addEventListener('submit', (event) => createTask(event).catch((error) => showMessage(error.message)))
   byId('purchase-operation-form').addEventListener('submit', (event) => createPurchase(event).catch((error) => showMessage(error.message)))
+  byId('purchase-follow-up-form').addEventListener('submit', (event) => createPurchaseFollowUp(event).catch((error) => showMessage(error.message)))
   byId('purchase-link-form').addEventListener('submit', (event) => linkPurchase(event).catch((error) => showMessage(error.message)))
   byId('purchase-operation').hidden = profile.interface_type !== 'workflow'
+  byId('purchase-follow-up-operation').hidden = profile.system_code !== 'connected_system'
   byId('purchase-link-operation').hidden = profile.system_code !== 'onboarding_system'
   byId('refresh-button').addEventListener('click', () => refreshData().catch((error) => showMessage(error.message)))
   byId('refresh-submissions-button').addEventListener('click', () => refreshSubmissions().catch((error) => showMessage(error.message)))

@@ -63,6 +63,20 @@
             <p id="purchase-result" class="operation-result"></p>
           </section>
 
+          <section id="purchase-follow-up-operation" class="panel operation-panel">
+            <h2>创建采购跟进任务</h2>
+            <form id="purchase-follow-up-form">
+              <label>MES 申请编号<input id="follow-up-mes-apply-no" required /></label>
+              <label>物料<input id="follow-up-material" required /></label>
+              <label>数量<input id="follow-up-quantity" type="number" min="0.0001" step="any" required /></label>
+              <label>申请人<input id="follow-up-applicant" required /></label>
+              <label>备注<textarea id="follow-up-remark" rows="3"></textarea></label>
+              <button type="submit" class="primary">创建跟进任务</button>
+            </form>
+            <p id="purchase-follow-up-result" class="operation-result"></p>
+            <div id="purchase-follow-up-list" class="record-list"></div>
+          </section>
+
           <section id="purchase-link-operation" class="panel operation-panel">
             <h2>回写采购单号</h2>
             <form id="purchase-link-form">
