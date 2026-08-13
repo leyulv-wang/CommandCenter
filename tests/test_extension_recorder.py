@@ -39,6 +39,32 @@ def profile() -> SystemProfile:
     )
 
 
+def local_profile() -> SystemProfile:
+    return SystemProfile(
+        system_code="connected_system",
+        display_name="本地采购系统",
+        allowed_hosts={"127.0.0.1"},
+        openapi_url="http://127.0.0.1:8101/openapi.json",
+        base_url="http://127.0.0.1:8101",
+        api_path_prefix="/api",
+        credential_header=None,
+        limits=ProfileLimits(
+            request_timeout_seconds=10,
+            max_response_bytes=100_000,
+            max_requests_per_minute=30,
+        ),
+        value_capture_policy="fingerprint_by_default",
+        sensitive_field_patterns=["(?i)token"],
+        tool_permissions=[
+            ToolPermission(
+                method="POST",
+                path="/api/purchase-follow-ups",
+                side_effect="write",
+            )
+        ],
+    )
+
+
 def recorder() -> ExtensionRecorder:
     return ExtensionRecorder(
         ToolCatalog(
@@ -57,6 +83,41 @@ def recorder() -> ExtensionRecorder:
             ]
         )
     )
+
+
+def multi_recorder() -> ExtensionRecorder:
+    catalogs = {
+        "yifeng_mes": ToolCatalog(
+            [
+                ToolDefinition(
+                    tool_id="yifeng_mes:listPurchaseApply",
+                    system_code="yifeng_mes",
+                    operation_id="listPurchaseApply",
+                    method="GET",
+                    base_url="https://yifeng.dtsum.com",
+                    path_template="/jeecg-boot/purchase/apply/list",
+                    content_type=None,
+                    side_effect="read",
+                    credential_header="X-Access-Token",
+                )
+            ]
+        ),
+        "connected_system": ToolCatalog(
+            [
+                ToolDefinition(
+                    tool_id="connected_system:createPurchaseFollowUp",
+                    system_code="connected_system",
+                    operation_id="createPurchaseFollowUp",
+                    method="POST",
+                    base_url="http://127.0.0.1:8101",
+                    path_template="/api/purchase-follow-ups",
+                    content_type="application/json",
+                    side_effect="write",
+                )
+            ]
+        ),
+    }
+    return ExtensionRecorder(catalog_provider=lambda item: catalogs[item.system_code])
 
 
 def page(origin: str = "https://yifeng.dtsum.com") -> dict[str, object]:
@@ -91,6 +152,10 @@ def network_event(sequence: int = 2, path: str = "/jeecg-boot/purchase/apply/lis
     }
 
 
+def identified(event: dict, system_code: str, tab_id: int) -> dict:
+    return {**event, "system_code": system_code, "tab_id": tab_id}
+
+
 def batch(recording_id, *events, batch_id=None) -> ExtensionEventBatch:
     return ExtensionEventBatch.model_validate(
         {
@@ -120,6 +185,80 @@ def test_extension_recorder_orders_events_and_matches_allowlisted_api():
         "pageNo": [FP]
     }
     assert grant.token not in trace.model_dump_json()
+
+
+def test_multi_system_recorder_routes_events_into_one_ordered_trace():
+    recording_id = uuid4()
+    target = multi_recorder()
+    grant = target.start(
+        recording_id,
+        "查询 MES 采购申请并创建本地后续处理单",
+        {},
+        [profile(), local_profile()],
+    )
+    local_network = identified(
+        network_event(4, "/api/purchase-follow-ups"),
+        "connected_system",
+        22,
+    )
+    local_network["method"] = "POST"
+
+    target.ingest(
+        recording_id,
+        batch(
+            recording_id,
+            identified(browser_event(1), "yifeng_mes", 11),
+            identified(network_event(2), "yifeng_mes", 11),
+            identified(
+                browser_event(3, "http://127.0.0.1:8101"),
+                "connected_system",
+                22,
+            ),
+            local_network,
+        ),
+        grant.token,
+    )
+    trace = target.stop(recording_id, grant.token)
+
+    assert [exchange.system_code for exchange in trace.api_exchanges] == [
+        "yifeng_mes",
+        "connected_system",
+    ]
+    assert [exchange.matched_tool_id for exchange in trace.api_exchanges] == [
+        "yifeng_mes:listPurchaseApply",
+        "connected_system:createPurchaseFollowUp",
+    ]
+    assert trace.ui_events[0].target["system_code"] == "yifeng_mes"
+    assert trace.ui_events[1].target["tab_id"] == 22
+
+
+def test_multi_system_recorder_rejects_mismatched_identity_and_origin():
+    recording_id = uuid4()
+    target = multi_recorder()
+    grant = target.start(recording_id, "联合操作", {}, [profile(), local_profile()])
+
+    with pytest.raises(ValueError, match="origin is not allowed"):
+        target.ingest(
+            recording_id,
+            batch(
+                recording_id,
+                identified(browser_event(), "connected_system", 11),
+            ),
+            grant.token,
+        )
+
+
+def test_multi_system_recorder_requires_identity_for_network_evidence():
+    recording_id = uuid4()
+    target = multi_recorder()
+    grant = target.start(recording_id, "联合操作", {}, [profile(), local_profile()])
+
+    with pytest.raises(ValueError, match="system identity"):
+        target.ingest(
+            recording_id,
+            batch(recording_id, network_event()),
+            grant.token,
+        )
 
 
 def test_extension_recorder_rejects_bad_token_and_clears_credentials():
