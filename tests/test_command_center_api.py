@@ -17,6 +17,7 @@ class FakeCommandCenterService:
         }
 
     def create_recording(self, request):
+        self.create_recording_request = request
         return self.recording
 
     async def start_recording(self, recording_id):
@@ -184,6 +185,44 @@ def test_recording_lifecycle_exposes_published_status():
     assert started.json()["status"] == "recording"
     assert stopped.status_code == 202
     assert current.json()["status"] == "published"
+
+
+def test_multi_system_recording_request_is_normalized_before_service_call():
+    service = FakeCommandCenterService()
+    client = client_for(service)
+
+    response = client.post(
+        "/recordings",
+        json={
+            "objective": "查询 MES 采购申请并创建本地后续处理单",
+            "source_system": "yifeng_mes",
+            "source_systems": ["yifeng_mes", "connected_system"],
+            "recording_mode": "multi_system",
+            "source_task_id": "joint-demo",
+            "capture_source": "browser_extension",
+        },
+    )
+
+    assert response.status_code == 201
+    request = service.create_recording_request
+    assert request.recording_mode == "multi_system"
+    assert request.source_systems == ["yifeng_mes", "connected_system"]
+
+
+def test_multi_system_recording_request_rejects_duplicate_systems():
+    response = client_for(FakeCommandCenterService()).post(
+        "/recordings",
+        json={
+            "objective": "联合演示",
+            "source_system": "yifeng_mes",
+            "source_systems": ["yifeng_mes", "yifeng_mes"],
+            "recording_mode": "multi_system",
+            "source_task_id": "joint-demo",
+            "capture_source": "browser_extension",
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_task_run_accepts_natural_language_request():

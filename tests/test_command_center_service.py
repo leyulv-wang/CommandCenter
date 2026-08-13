@@ -107,6 +107,61 @@ def test_service_connects_recording_stop_to_learning_graph(tmp_path):
     assert repository.get_recording(created["recording_id"])["status"] == "published"
 
 
+def test_service_persists_ordered_multi_system_recording_scope(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    profiles = {
+        "yifeng_mes": object(),
+        "connected_system": object(),
+    }
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+        system_profiles=profiles,
+    )
+
+    created = service.create_recording(
+        CreateRecordingRequest(
+            objective="查询 MES 采购申请并创建本地后续处理单",
+            source_system="yifeng_mes",
+            source_systems=["yifeng_mes", "connected_system"],
+            recording_mode="multi_system",
+            source_task_id="joint-demo",
+            capture_source="browser_extension",
+        )
+    )
+
+    assert created["recording_mode"] == "multi_system"
+    assert created["source_systems"] == ["yifeng_mes", "connected_system"]
+    assert repository.get_recording(created["recording_id"])["source_systems"] == [
+        "yifeng_mes",
+        "connected_system",
+    ]
+
+
+def test_service_rejects_unknown_system_in_multi_system_scope(tmp_path):
+    service = CommandCenterService(
+        repository=CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}"),
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+        system_profiles={"yifeng_mes": object()},
+    )
+
+    with pytest.raises(ValueError, match="not configured"):
+        service.create_recording(
+            CreateRecordingRequest(
+                objective="联合演示",
+                source_system="yifeng_mes",
+                source_systems=["yifeng_mes", "missing_system"],
+                recording_mode="multi_system",
+                source_task_id="joint-demo",
+                capture_source="browser_extension",
+            )
+        )
+
+
 def test_service_persists_learning_rejection_feedback(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
     service = CommandCenterService(
@@ -518,6 +573,8 @@ def test_service_lists_only_safe_recent_recording_fields(tmp_path):
         "status",
         "objective",
         "source_system",
+        "source_systems",
+        "recording_mode",
         "capture_source",
         "created_at",
         "updated_at",

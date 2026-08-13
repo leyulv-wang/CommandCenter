@@ -4,16 +4,41 @@ from typing import Any, Callable, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    model_validator,
+)
 
 from app.command_center.schemas import EvidenceIdentifier, ExtensionEventBatch
 
 
 class CreateRecordingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     objective: str = Field(min_length=1)
     source_system: str
+    source_systems: list[str] = Field(default_factory=list)
+    recording_mode: Literal["single_system", "multi_system"] = "single_system"
     source_task_id: str
     capture_source: Literal["playwright", "browser_extension"] = "playwright"
+
+    @model_validator(mode="after")
+    def normalize_recording_scope(self) -> CreateRecordingRequest:
+        systems = self.source_systems or [self.source_system]
+        if len(systems) != len(set(systems)):
+            raise ValueError("source systems must be unique")
+        if not systems or systems[0] != self.source_system:
+            raise ValueError("source_system must be the first source system")
+        if self.recording_mode == "single_system" and len(systems) != 1:
+            raise ValueError("single-system recording requires exactly one system")
+        if self.recording_mode == "multi_system" and len(systems) < 2:
+            raise ValueError("multi-system recording requires at least two systems")
+        self.source_systems = systems
+        return self
 
 
 class ExtensionCredentialRequest(BaseModel):

@@ -202,6 +202,33 @@ def test_extension_batch_preserves_only_redacted_semantic_evidence():
     assert batch.events[0].value_fingerprint is None
 
 
+def test_extension_evidence_accepts_optional_multi_system_identity():
+    payload = valid_extension_batch()
+    payload["events"][0]["system_code"] = "yifeng_mes"
+    payload["events"][0]["tab_id"] = 17
+    payload["page_mutations"] = [
+        {
+            **valid_page_mutation(2),
+            "system_code": "connected_system",
+            "tab_id": 23,
+        }
+    ]
+
+    batch = schemas.ExtensionEventBatch.model_validate(payload)
+
+    assert batch.events[0].system_code == "yifeng_mes"
+    assert batch.events[0].tab_id == 17
+    assert batch.page_mutations[0].system_code == "connected_system"
+    assert batch.page_mutations[0].tab_id == 23
+
+
+def test_historical_single_system_evidence_remains_valid_without_identity():
+    batch = schemas.ExtensionEventBatch.model_validate(valid_extension_batch())
+
+    assert batch.events[0].system_code is None
+    assert batch.events[0].tab_id is None
+
+
 def test_extension_network_evidence_validates_query_parameter_fingerprints():
     payload = valid_extension_batch()
     now = datetime.now(UTC).isoformat()

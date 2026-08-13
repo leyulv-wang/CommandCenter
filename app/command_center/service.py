@@ -243,6 +243,18 @@ class CommandCenterService:
             raise KeyError(f"unknown system profile: {system_code}") from exc
 
     def create_recording(self, request: Any) -> dict[str, Any]:
+        source_systems = list(request.source_systems)
+        if request.recording_mode == "multi_system":
+            missing = [
+                system_code
+                for system_code in source_systems
+                if system_code not in self.system_profiles
+            ]
+            if missing:
+                raise ValueError(
+                    "recording system profile is not configured: "
+                    + ", ".join(missing)
+                )
         recording_id = uuid4()
         now = datetime.now(UTC).isoformat()
         payload = {
@@ -250,6 +262,8 @@ class CommandCenterService:
             "status": "created",
             "objective": request.objective,
             "source_system": request.source_system,
+            "source_systems": source_systems,
+            "recording_mode": request.recording_mode,
             "source_task_id": request.source_task_id,
             "capture_source": request.capture_source,
             "created_at": now,
@@ -329,8 +343,9 @@ class CommandCenterService:
             raise ValueError("recording capture source is not browser_extension")
         if self.extension_recorder is None:
             raise ValueError("browser extension recorder is not configured")
-        profile = self.system_profiles.get(str(recording["source_system"]))
-        if profile is None:
+        source_systems = recording.get("source_systems") or [recording["source_system"]]
+        profiles = [self.system_profiles.get(str(system_code)) for system_code in source_systems]
+        if any(profile is None for profile in profiles):
             raise ValueError("recording system profile is not configured")
         grant = self.extension_recorder.start(
             identifier,
@@ -339,7 +354,7 @@ class CommandCenterService:
                 "system_code": recording["source_system"],
                 "object_id": recording["source_task_id"],
             },
-            profile,
+            profiles[0] if len(profiles) == 1 else profiles,
         )
         recording["status"] = "recording"
         self._save_recording(identifier, recording)
@@ -600,6 +615,8 @@ class CommandCenterService:
             "status",
             "objective",
             "source_system",
+            "source_systems",
+            "recording_mode",
             "capture_source",
             "created_at",
             "updated_at",

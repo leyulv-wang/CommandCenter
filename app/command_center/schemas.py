@@ -162,6 +162,8 @@ class PageDescriptor(_EvidenceModel):
 
 
 class PageMutationEvidence(_EvidenceModel):
+    system_code: EvidenceIdentifier | None = None
+    tab_id: int | None = Field(default=None, ge=0)
     mutation_id: UUID
     client_sequence: int = Field(ge=1)
     occurred_at: datetime
@@ -175,6 +177,8 @@ class PageMutationEvidence(_EvidenceModel):
 
 
 class RecordedBrowserEvent(_EvidenceModel):
+    system_code: EvidenceIdentifier | None = None
+    tab_id: int | None = Field(default=None, ge=0)
     event_id: UUID
     client_sequence: int = Field(ge=1)
     occurred_at: datetime
@@ -186,6 +190,8 @@ class RecordedBrowserEvent(_EvidenceModel):
 
 
 class RecordedNetworkExchange(_EvidenceModel):
+    system_code: EvidenceIdentifier | None = None
+    tab_id: int | None = Field(default=None, ge=0)
     exchange_id: UUID
     client_sequence: int = Field(ge=1)
     started_at: datetime
