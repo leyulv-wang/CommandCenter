@@ -4,6 +4,7 @@ import logging
 from typing import Any
 from uuid import uuid4
 
+from app.command_center.analysis_projection import project_trace_for_analysis
 from app.command_center.agent_runtime import (
     AgentRuntime,
     LegacyStructuredModelRuntime,
@@ -86,20 +87,57 @@ class AgentSuite:
         )
 
     def segment_trace(self, trace: Any) -> TraceSegmentation:
-        result = self.model.generate(
-            TraceSegmentation,
-            (
-                "你是演示时序分段智能体。只依据已脱敏的 UI、页面变化和网络证据，"
-                "system_code 与 tab_id 用于识别跨系统页面切换；一个业务动作可以跨越多个系统，"
-                "把连续操作划分为业务动作、辅助查询、验证查询、导航、静态或遥测流量"
-                "以及不确定片段。不要猜测不存在的证据；不确定时明确列入 uncertainties。"
-                "conclusive 表示整体是否足以继续学习核心业务能力，不表示必须不存在任何"
-                "局部不确定性。核心业务动作已有可归因的网络交换时，可以保留局部不确定性"
-                "并继续后续归因；不能仅因非核心导航、页面切换或辅助动作缺少 URL 或页面"
-                "变化证据，就否决证据充分的核心业务动作。"
-            ),
-            {"trace": trace},
-        )
+        analysis_trace = project_trace_for_analysis(trace)
+        system_codes = _ordered_trace_system_codes(analysis_trace)
+        if len(system_codes) > 1:
+            system_analyses = []
+            for system_code in system_codes:
+                system_trace = _trace_for_system(analysis_trace, system_code)
+                analysis = self.model.generate(
+                    TraceSegmentation,
+                    (
+                        "你是单一业务系统的演示时序分析智能体。只分析指定 system_code "
+                        "内的已脱敏证据；说明该系统中实际发生的业务动作、辅助查询、验证查询、"
+                        "导航和不确定性。不要因为跨系统目标尚未在本系统内完成就丢弃已有证据。"
+                    ),
+                    {"system_code": system_code, "trace": system_trace},
+                )
+                _validate_segmentation_references(analysis, trace)
+                system_analyses.append(
+                    {
+                        "system_code": system_code,
+                        "analysis": analysis.model_dump(mode="json"),
+                    }
+                )
+            result = self.model.generate(
+                TraceSegmentation,
+                (
+                    "你是跨系统演示协调智能体。根据各系统分析智能体的结论和全局证据顺序，"
+                    "合并为一份跨系统时序分段。保留真实证据 ID，重新生成全局唯一、连续排序的"
+                    " segment_id 和 sequence。各系统局部不完整不等于整体不可学习；由你结合"
+                    "跨系统目标判断 conclusive。不要补造原始证据中不存在的动作或 API。"
+                ),
+                {
+                    "objective": analysis_trace.get("objective"),
+                    "system_analyses": system_analyses,
+                    "global_evidence_order": _global_evidence_order(analysis_trace),
+                },
+            )
+        else:
+            result = self.model.generate(
+                TraceSegmentation,
+                (
+                    "你是演示时序分段智能体。只依据已脱敏的 UI、页面变化和网络证据，"
+                    "system_code 与 tab_id 用于识别跨系统页面切换；一个业务动作可以跨越多个系统，"
+                    "把连续操作划分为业务动作、辅助查询、验证查询、导航、静态或遥测流量"
+                    "以及不确定片段。不要猜测不存在的证据；不确定时明确列入 uncertainties。"
+                    "conclusive 表示整体是否足以继续学习核心业务能力，不表示必须不存在任何"
+                    "局部不确定性。核心业务动作已有可归因的网络交换时，可以保留局部不确定性"
+                    "并继续后续归因；不能仅因非核心导航、页面切换或辅助动作缺少 URL 或页面"
+                    "变化证据，就否决证据充分的核心业务动作。"
+                ),
+                {"trace": analysis_trace},
+            )
         _validate_segmentation_references(result, trace)
         return result
 
@@ -117,7 +155,11 @@ class AgentSuite:
                 "按每条交换自身的 system_code 在 Tool 目录中归因，保留跨系统先后关系。"
                 "真实存在的片段、网络交换和 Tool；HTTP GET 本身不代表安全或业务主接口。"
             ),
-            {"segmentation": segmentation, "trace": trace, "catalog": catalog},
+            {
+                "segmentation": segmentation,
+                "trace": project_trace_for_analysis(trace),
+                "catalog": catalog,
+            },
         )
         _validate_attribution_references(result, segmentation, trace, catalog)
         return result
@@ -136,11 +178,16 @@ class AgentSuite:
                 "跨系统时允许后续写操作引用前序读取步骤的可信输出；"
                 "证据不足必须标记 uncertainty，不能用名称关键词硬猜。"
                 "页面 value_fingerprint 与 query_parameter_fingerprints 中的 HMAC 指纹相同只能证明值相等，"
+                "页面 value_fingerprint 也可以与 body_field_fingerprints 中按 JSON 路径记录的指纹比较；"
                 "仍须结合控件语义、操作时序、API 归因和 Tool schema 判断业务含义；"
                 "不能只根据字段名称建立映射，指纹缺失或不相等时也不能猜测对应关系。"
                 f"{DEMONSTRATION_LITERAL_PROMPT}"
             ),
-            {"attribution": attribution, "trace": trace, "catalog": catalog},
+            {
+                "attribution": attribution,
+                "trace": project_trace_for_analysis(trace),
+                "catalog": catalog,
+            },
         )
         _validate_mapping_references(result, attribution, trace, catalog)
         return result
@@ -162,7 +209,7 @@ class AgentSuite:
             payload = {
                 "mapping": mapping,
                 "attribution": attribution,
-                "trace": trace,
+                "trace": project_trace_for_analysis(trace),
                 "catalog": catalog,
             }
             prompt = (
@@ -517,6 +564,64 @@ def _trace_ids(trace: Any, collection: str, identifier: str) -> set[str]:
         for item in payload.get(collection, [])
         if isinstance(item, dict) and identifier in item
     }
+
+
+def _ordered_trace_system_codes(trace: dict[str, Any]) -> list[str]:
+    codes: list[str] = []
+    for item in trace.get("ui_events", []):
+        code = (item.get("target") or {}).get("system_code")
+        if code and code not in codes:
+            codes.append(str(code))
+    for collection in ("api_exchanges", "page_mutations"):
+        for item in trace.get(collection, []):
+            code = item.get("system_code")
+            if code and code not in codes:
+                codes.append(str(code))
+    return codes
+
+
+def _trace_for_system(trace: dict[str, Any], system_code: str) -> dict[str, Any]:
+    return {
+        "objective": trace.get("objective"),
+        "ui_events": [
+            item
+            for item in trace.get("ui_events", [])
+            if (item.get("target") or {}).get("system_code") == system_code
+        ],
+        "api_exchanges": [
+            item
+            for item in trace.get("api_exchanges", [])
+            if item.get("system_code") == system_code
+        ],
+        "page_mutations": [
+            item
+            for item in trace.get("page_mutations", [])
+            if item.get("system_code") == system_code
+        ],
+    }
+
+
+def _global_evidence_order(trace: dict[str, Any]) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
+    for item in trace.get("ui_events", []):
+        evidence.append(
+            {
+                "sequence": item.get("sequence"),
+                "system_code": (item.get("target") or {}).get("system_code"),
+                "evidence_type": "ui_event",
+                "evidence_id": item.get("event_id"),
+            }
+        )
+    for item in trace.get("api_exchanges", []):
+        evidence.append(
+            {
+                "sequence": item.get("sequence"),
+                "system_code": item.get("system_code"),
+                "evidence_type": "api_exchange",
+                "evidence_id": item.get("exchange_id"),
+            }
+        )
+    return sorted(evidence, key=lambda item: int(item.get("sequence") or 0))
 
 
 def _catalog_tool_ids(catalog: Any) -> set[str]:

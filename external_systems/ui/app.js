@@ -114,6 +114,40 @@ function addFollowUpItem() {
   byId('follow-up-items').appendChild(next)
 }
 
+function fillFollowUpTestData() {
+  const container = byId('follow-up-items')
+  if (container.querySelectorAll('.follow-up-item').length < 2) addFollowUpItem()
+  const rows = [...container.querySelectorAll('.follow-up-item')].slice(0, 2)
+  const values = [
+    {
+      material_code: 'LCF4607A',
+      quantity: '600',
+      unit: 'KG',
+      suggested_supplier: '陶氏有机硅(张家港)',
+      required_date: '2026-04-21',
+      remark: '',
+    },
+    {
+      material_code: 'LCF4607B',
+      quantity: '600',
+      unit: 'KG',
+      suggested_supplier: '陶氏有机硅(张家港)',
+      required_date: '2026-04-21',
+      remark: '',
+    },
+  ]
+  byId('follow-up-title').value = '采购申请跟进'
+  byId('follow-up-remark').value = '联合录制测试'
+  rows.forEach((row, index) => {
+    Object.entries(values[index]).forEach(([field, value]) => {
+      const input = row.querySelector(`[data-field="${field}"]`)
+      input.value = value
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+  })
+}
+
 async function refreshSubmissions() {
   const submissions = await request('/api/submissions')
   renderList('submission-list', submissions.items)
@@ -213,6 +247,7 @@ async function init() {
   byId('task-form').addEventListener('submit', (event) => createTask(event).catch((error) => showMessage(error.message)))
   byId('purchase-operation-form').addEventListener('submit', (event) => createPurchase(event).catch((error) => showMessage(error.message)))
   byId('purchase-follow-up-form').addEventListener('submit', (event) => createPurchaseFollowUp(event).catch((error) => showMessage(error.message)))
+  byId('fill-follow-up-test-data').addEventListener('click', fillFollowUpTestData)
   byId('add-follow-up-item').addEventListener('click', addFollowUpItem)
   byId('purchase-link-form').addEventListener('submit', (event) => linkPurchase(event).catch((error) => showMessage(error.message)))
   byId('purchase-operation').hidden = profile.interface_type !== 'workflow'
@@ -225,4 +260,6 @@ async function init() {
   await refreshData()
 }
 
-init().catch((error) => showMessage(error.message))
+if (!globalThis.__COMMANDCENTER_DISABLE_AUTO_INIT__) {
+  init().catch((error) => showMessage(error.message))
+}

@@ -105,6 +105,61 @@ describe('CommandCenter evidence converter', () => {
     expect(JSON.stringify(batch)).not.toContain('alice');
   });
 
+  it('aligns UI values with nested JSON body fields without exposing raw values', async () => {
+    const converter = createEvidenceConverter({
+      allowedOrigins: ['http://127.0.0.1:8101'],
+      fingerprintKey: 'local-recording-key',
+    });
+    converter.append({
+      ...base('action', 1_000),
+      url: 'http://127.0.0.1:8101/',
+      kind: 'action',
+      action_type: 'input',
+      target: {
+        tag: 'input', role: 'input', name: '物料编码',
+        selector: '[data-field="material_code"]', xpath: '//*[@data-field="material_code"]',
+      },
+      value: { value: 'LCF4607A' },
+    });
+    converter.append({
+      ...base('network_request', 1_010),
+      url: 'http://127.0.0.1:8101/',
+      kind: 'network_request', request_id: 'req-json-body', method: 'POST',
+      full_url: 'http://127.0.0.1:8101/api/purchase-follow-ups',
+      fetch_kind: 'fetch', req_headers: {},
+      req_body: {
+        value: JSON.stringify({
+          title: '采购申请跟进',
+          items: [{ material_code: 'LCF4607A', quantity: 600 }],
+        }),
+      },
+    });
+    converter.append({
+      ...base('network_response', 1_020),
+      url: 'http://127.0.0.1:8101/',
+      kind: 'network_response', request_id: 'req-json-body', status: 201,
+    });
+
+    const batch = await converter.flush(recordingId);
+    const input = batch?.events.find((event) => 'event_type' in event);
+    const exchange = batch?.events.find((event) => 'method' in event);
+
+    expect(exchange).toMatchObject({
+      body_field_fingerprints: {
+        'title': [expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/)],
+        'items.0.material_code': [expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/)],
+        'items.0.quantity': [expect.stringMatching(/^hmac-sha256:[0-9a-f]{64}$/)],
+      },
+    });
+    expect(input?.value_fingerprint).toBe(
+      exchange && 'body_field_fingerprints' in exchange
+        ? exchange.body_field_fingerprints?.['items.0.material_code']?.[0]
+        : undefined,
+    );
+    expect(JSON.stringify(batch)).not.toContain('LCF4607A');
+    expect(JSON.stringify(batch)).not.toContain('采购申请跟进');
+  });
+
   it('orders a page action and its completed API exchange without raw values', async () => {
     const converter = createEvidenceConverter({
       allowedOrigins: ['http://yifeng.dtsum.com'],

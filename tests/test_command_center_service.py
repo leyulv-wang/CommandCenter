@@ -913,18 +913,12 @@ def test_api_candidate_does_not_fall_back_to_browser_execution(tmp_path):
     assert extension.cleared is not None
 
 
-def test_api_rejection_is_preserved_when_browser_fallback_is_created(tmp_path):
+def test_api_rejection_with_matched_exchanges_stays_on_the_api_learning_path(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
 
     class BrowserDistiller:
         def compile_browser_skill(self, trace, allowed_origins):
-            return {
-                "name": "查询订单",
-                "execution_mode": "browser",
-                "status": "candidate",
-                "source_recording_id": trace["recording_id"],
-                "steps": [{"action": "click"}],
-            }
+            raise AssertionError("matched API evidence must not enter the browser path")
 
     class ClearableExtension:
         def clear_credentials(self, recording_id):
@@ -973,11 +967,14 @@ def test_api_rejection_is_preserved_when_browser_fallback_is_created(tmp_path):
 
     result = service.analyze_extension_recording(created["recording_id"])
 
-    assert result["status"] == "browser_candidate"
-    assert result["api_learning_result"] == api_rejection
+    assert result["status"] == "rejected"
+    assert result["analysis_stage"] == "completed"
+    assert result["learning_result"] == api_rejection
+    assert result["failure_reasons"] == ["无法确认主业务 API。"]
+    assert "api_learning_result" not in result
 
 
-def test_api_rejection_reason_survives_crashed_browser_fallback(tmp_path):
+def test_api_rejection_reason_is_returned_without_browser_fallback(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
 
     class CrashingBrowserDistiller:
@@ -1031,6 +1028,7 @@ def test_api_rejection_reason_survives_crashed_browser_fallback(tmp_path):
 
     result = service.analyze_extension_recording(created["recording_id"])
 
-    assert result["status"] == "needs_reteach"
+    assert result["status"] == "rejected"
+    assert result["analysis_stage"] == "completed"
     assert result["failure_reasons"] == ["字段对应关系证据不足"]
     assert "private model provider response" not in str(result)

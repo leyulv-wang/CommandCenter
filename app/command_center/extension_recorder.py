@@ -152,6 +152,9 @@ class ExtensionRecorder:
                             "query_parameter_fingerprints": (
                                 item.query_parameter_fingerprints
                             ),
+                            "body_field_fingerprints": (
+                                item.body_field_fingerprints
+                            ),
                             "request_fingerprint": item.request_fingerprint,
                             "endpoint_fingerprint": item.endpoint_fingerprint,
                         },

@@ -44,6 +44,7 @@ export type CommandCenterNetworkExchange = {
   path_template: string;
   query_parameter_names: string[];
   query_parameter_fingerprints: Record<string, string[]>;
+  body_field_fingerprints?: Record<string, string[]>;
   request_fingerprint?: string;
   response_status: number;
   response_fingerprint?: string;
@@ -310,6 +311,9 @@ async function convertExchange(
     );
     queryFingerprintCount += values.length;
   }
+  const bodyFieldFingerprints = requestMaterial
+    ? await fingerprintBodyFields(requestMaterial, key)
+    : {};
   return {
     event: {
       exchange_id: randomUuid(),
@@ -320,6 +324,9 @@ async function convertExchange(
       path_template: url.pathname || '/',
       query_parameter_names: queryParameterNames,
       query_parameter_fingerprints: queryParameterFingerprints,
+      ...(Object.keys(bodyFieldFingerprints).length > 0
+        ? { body_field_fingerprints: bodyFieldFingerprints }
+        : {}),
       ...(requestFingerprint ? { request_fingerprint: requestFingerprint } : {}),
       response_status: Number.isInteger(response.status) ? response.status! : 0,
       ...(responseFingerprint ? { response_fingerprint: responseFingerprint } : {}),
@@ -328,10 +335,46 @@ async function convertExchange(
     fingerprinted:
       1 +
       queryFingerprintCount +
+      Object.values(bodyFieldFingerprints).reduce((total, values) => total + values.length, 0) +
       (requestFingerprint ? 1 : 0) +
       (responseFingerprint ? 1 : 0),
     redacted: (request.req_body ? 1 : 0) + (response.res_body ? 1 : 0) + Object.keys(request.req_headers).length,
   };
+}
+
+async function fingerprintBodyFields(
+  body: string,
+  key: string,
+): Promise<Record<string, string[]>> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    parsed = Object.fromEntries(new URLSearchParams(body));
+  }
+  const fields = flattenScalarFields(parsed).slice(0, 256);
+  const result: Record<string, string[]> = {};
+  for (const [path, value] of fields) {
+    if (!path || !value) continue;
+    (result[path] ??= []).push(await fingerprint(value, key));
+  }
+  return result;
+}
+
+function flattenScalarFields(value: unknown, path = ''): Array<[string, string]> {
+  if (value === null || value === undefined) return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) =>
+      flattenScalarFields(item, path ? `${path}.${index}` : String(index)),
+    );
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).flatMap(([name, item]) =>
+      flattenScalarFields(item, path ? `${path}.${name}` : name),
+    );
+  }
+  if (!['string', 'number', 'boolean'].includes(typeof value)) return [];
+  return [[path, String(value)]];
 }
 
 async function pageDescriptor(url: string, key: string): Promise<CommandCenterPageDescriptor | null> {

@@ -535,12 +535,6 @@ class CommandCenterService:
                 result = graph.invoke(
                     {"recording_id": str(identifier), "trace": trace}
                 )
-                if (
-                    result.get("final_status") == "rejected"
-                    and self.browser_skill_distiller is not None
-                ):
-                    recording["api_learning_result"] = jsonable_encoder(result)
-                    result = self._compile_browser_candidate(recording)
             recording["status"] = str(result.get("final_status", "rejected"))
             recording["learning_result"] = jsonable_encoder(result)
             recording["analysis_stage"] = (

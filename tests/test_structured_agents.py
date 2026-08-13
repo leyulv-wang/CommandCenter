@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from uuid import uuid4
 
 import pytest
@@ -449,3 +450,210 @@ def test_segmentation_prompt_separates_local_uncertainty_from_overall_learnabili
     assert "整体是否足以继续学习" in model.prompt
     assert "局部不确定性" in model.prompt
     assert "不能仅因非核心导航" in model.prompt
+
+
+class TraceProjectionCaptureModel:
+    def __init__(self):
+        self.payload = None
+
+    def generate(self, schema, system_prompt, payload):
+        self.payload = payload
+        return schema.model_validate(
+            {
+                "summary": "保留完整证据标识的精简轨迹",
+                "segments": [],
+                "uncertainties": [],
+                "conclusive": True,
+            }
+        )
+
+
+def test_segmentation_receives_a_bounded_projection_without_mutating_audit_trace():
+    event_id = uuid4()
+    exchange_id = uuid4()
+    mutation_id = uuid4()
+    verbose_label = "采购跟进表单 " * 200
+    trace = {
+        "trace_id": str(uuid4()),
+        "recording_id": str(uuid4()),
+        "objective": "跨系统创建采购跟进任务",
+        "source_task": {"task_id": "demo-task"},
+        "started_at": "2026-08-13T05:00:00Z",
+        "ended_at": "2026-08-13T05:01:00Z",
+        "ui_events": [
+            {
+                "event_id": str(event_id),
+                "sequence": 1,
+                "timestamp": "2026-08-13T05:00:01Z",
+                "page_url": "http://127.0.0.1:8101/operations?verbose=transport",
+                "action_type": "click",
+                "target": {
+                    "system_code": "connected_system",
+                    "tab_id": 12,
+                    "accessible_name": verbose_label,
+                    "page_fingerprint": "hmac-sha256:" + "a" * 64,
+                    "empty": None,
+                },
+                "value_ref": None,
+                "screenshot_ref": "large-screenshot-reference",
+            }
+        ],
+        "api_exchanges": [
+            {
+                "exchange_id": str(exchange_id),
+                "sequence": 2,
+                "started_at": "2026-08-13T05:00:02Z",
+                "completed_at": "2026-08-13T05:00:03Z",
+                "system_code": "connected_system",
+                "method": "POST",
+                "path": "/api/purchase-follow-ups",
+                "request_body": {
+                    "query_parameter_names": [],
+                    "query_parameter_fingerprints": {},
+                    "request_fingerprint": "hmac-sha256:" + "b" * 64,
+                    "endpoint_fingerprint": "hmac-sha256:" + "c" * 64,
+                },
+                "response_status": 201,
+                "response_body": {"response_fingerprint": None},
+                "matched_tool_id": "connected_system:create_purchase_follow_up",
+                "match_status": "matched",
+            }
+        ],
+        "page_mutations": [
+            {
+                "mutation_id": str(mutation_id),
+                "client_sequence": 3,
+                "occurred_at": "2026-08-13T05:00:04Z",
+                "system_code": "connected_system",
+                "tab_id": 12,
+                "page": {"url": "http://127.0.0.1:8101/operations"},
+                "mutation_type": "form_state_change",
+                "changed_control_fingerprints": ["hmac-sha256:" + "d" * 64],
+                "before_fingerprint": None,
+                "after_fingerprint": "hmac-sha256:" + "e" * 64,
+            }
+        ],
+        "redaction_summary": {"redacted_field_count": 2},
+    }
+    original = deepcopy(trace)
+    model = TraceProjectionCaptureModel()
+
+    AgentSuite(model).segment_trace(trace)
+
+    projected = model.payload["trace"]
+    assert trace == original
+    assert projected["ui_events"][0]["event_id"] == str(event_id)
+    assert projected["api_exchanges"][0]["exchange_id"] == str(exchange_id)
+    assert projected["page_mutations"][0]["mutation_id"] == str(mutation_id)
+    assert projected["ui_events"][0]["target"]["system_code"] == "connected_system"
+    assert projected["api_exchanges"][0]["matched_tool_id"].startswith(
+        "connected_system:"
+    )
+    assert len(projected["ui_events"][0]["target"]["accessible_name"]) <= 320
+    assert projected["ui_events"][0]["page_path"] == "/operations"
+    assert "page_url" not in projected["ui_events"][0]
+    assert "page_fingerprint" not in projected["ui_events"][0]["target"]
+    assert "changed_control_fingerprints" not in projected["page_mutations"][0]
+    assert projected["page_mutations"][0]["changed_control_count"] == 1
+    assert "timestamp" not in projected["ui_events"][0]
+    assert "screenshot_ref" not in projected["ui_events"][0]
+    assert "started_at" not in projected["api_exchanges"][0]
+    assert len(json.dumps(projected, ensure_ascii=False)) < len(
+        json.dumps(trace, ensure_ascii=False)
+    ) / 2
+
+
+class MultiSystemSegmentationModel:
+    def __init__(self):
+        self.payloads = []
+
+    def generate(self, schema, system_prompt, payload):
+        self.payloads.append(payload)
+        if "system_analyses" in payload:
+            event_ids = [
+                event["event_id"]
+                for analysis in payload["system_analyses"]
+                for segment in analysis["analysis"]["segments"]
+                for event in [
+                    {"event_id": segment["source_ui_event_ids"][0]}
+                ]
+            ]
+            return schema.model_validate(
+                {
+                    "summary": "协调两个系统的阶段结论",
+                    "segments": [
+                        {
+                            "segment_id": f"cross_{index}",
+                            "sequence": index,
+                            "classification": "business_action",
+                            "summary": "系统阶段",
+                            "source_ui_event_ids": [event_id],
+                        }
+                        for index, event_id in enumerate(event_ids, 1)
+                    ],
+                    "conclusive": True,
+                }
+            )
+        event = payload["trace"]["ui_events"][0]
+        return schema.model_validate(
+            {
+                "summary": "单系统阶段",
+                "segments": [
+                    {
+                        "segment_id": "local_segment",
+                        "sequence": 1,
+                        "classification": "business_action",
+                        "summary": "系统操作",
+                        "source_ui_event_ids": [event["event_id"]],
+                    }
+                ],
+                "conclusive": True,
+            }
+        )
+
+
+def test_multi_system_segmentation_uses_per_system_agents_before_coordination():
+    mes_event_id = uuid4()
+    local_event_id = uuid4()
+    trace = {
+        "objective": "跨系统创建采购跟进任务",
+        "ui_events": [
+            {
+                "event_id": str(mes_event_id),
+                "sequence": 1,
+                "action_type": "click",
+                "page_url": "http://mes.example/purchase",
+                "target": {"system_code": "yifeng_mes", "accessible_name": "查询"},
+            },
+            {
+                "event_id": str(local_event_id),
+                "sequence": 2,
+                "action_type": "submit",
+                "page_url": "http://127.0.0.1:8101/",
+                "target": {
+                    "system_code": "connected_system",
+                    "accessible_name": "创建跟进任务",
+                },
+            },
+        ],
+        "api_exchanges": [],
+        "page_mutations": [],
+    }
+    model = MultiSystemSegmentationModel()
+
+    result = AgentSuite(model).segment_trace(trace)
+
+    assert len(model.payloads) == 3
+    subsystem_payloads = model.payloads[:2]
+    assert [
+        payload["system_code"] for payload in subsystem_payloads
+    ] == ["yifeng_mes", "connected_system"]
+    assert all(len(payload["trace"]["ui_events"]) == 1 for payload in subsystem_payloads)
+    coordinator = model.payloads[2]
+    assert [
+        item["system_code"] for item in coordinator["system_analyses"]
+    ] == ["yifeng_mes", "connected_system"]
+    assert {str(event_id) for segment in result.segments for event_id in segment.source_ui_event_ids} == {
+        str(mes_event_id),
+        str(local_event_id),
+    }
