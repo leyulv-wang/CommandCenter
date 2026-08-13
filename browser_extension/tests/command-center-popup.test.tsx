@@ -75,6 +75,29 @@ describe('CommandCenter popup', () => {
     );
   });
 
+  it('starts a joint recording only when both MVP systems are selected', async () => {
+    vi.mocked(sendRuntimeMessage)
+      .mockResolvedValueOnce({ active: false, traceId: null, row: null })
+      .mockResolvedValueOnce({
+        active: true, traceId: 'tr_joint',
+        row: { trace_id: 'tr_joint', status: 'recording', envelope: { started_at: new Date().toISOString(), summary: { event_counts: {} } } },
+      });
+    render(<PopupApp />);
+    await screen.findByText('采购业务系统');
+
+    await userEvent.click(screen.getByRole('button', { name: '联合录制' }));
+    expect(screen.getByRole('checkbox', { name: '益丰 MES' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: '采购业务系统' })).toBeChecked();
+    await userEvent.type(screen.getByLabelText('演示目标'), '查询并创建采购跟进');
+    await userEvent.click(screen.getByRole('button', { name: '开始录制' }));
+
+    await waitFor(() => expect(sendRuntimeMessage).toHaveBeenCalledWith({
+      type: 'start-recording',
+      label: '查询并创建采购跟进',
+      profileIds: ['yifeng-mes', 'local-purchase'],
+    }));
+  });
+
   it('lets the user persistently authorize the matched MES connection', async () => {
     vi.stubGlobal('chrome', {
       tabs: {
