@@ -389,10 +389,17 @@ class FieldMappingAnalysis(BaseModel):
 
 class SkillInput(BaseModel):
     name: str
-    type: Literal["string", "integer", "number", "boolean", "array"]
+    type: Literal["string", "integer", "number", "boolean", "array", "object"]
     description: str
     required: bool = True
     source_hint: str | None = None
+    json_schema: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def require_matching_json_schema_type(self) -> SkillInput:
+        if self.json_schema and self.json_schema.get("type") != self.type:
+            raise ValueError("json_schema type must match Skill input type")
+        return self
 
 
 class BrowserLocator(BaseModel):
@@ -484,6 +491,20 @@ class SkillStep(BaseModel):
         return self
 
 
+class SkillCompensationDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    trigger_step_id: str
+    compensates_step_ids: list[str] = Field(min_length=1)
+    step: SkillStep
+
+    @model_validator(mode="after")
+    def require_write_step(self) -> SkillCompensationDefinition:
+        if self.step.side_effect != "write":
+            raise ValueError("compensation step must be a write")
+        return self
+
+
 class SuccessCondition(BaseModel):
     condition_id: str
     description: str
@@ -526,9 +547,24 @@ class SkillDefinition(BaseModel):
     outputs: list[SkillOutput]
     steps: list[SkillStep]
     success_conditions: list[SuccessCondition]
+    compensations: list[SkillCompensationDefinition] = Field(default_factory=list)
     action: SkillActionDefinition | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     published_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_compensation_references(self) -> SkillDefinition:
+        ordinary_step_ids = {step.step_id for step in self.steps}
+        compensation_ids: set[str] = set()
+        for compensation in self.compensations:
+            if compensation.trigger_step_id not in ordinary_step_ids:
+                raise ValueError("compensation trigger_step_id must reference an existing step")
+            if not set(compensation.compensates_step_ids) <= ordinary_step_ids:
+                raise ValueError("compensates_step_ids must reference existing steps")
+            if compensation.step.step_id in ordinary_step_ids | compensation_ids:
+                raise ValueError("compensation step_id must be unique")
+            compensation_ids.add(compensation.step.step_id)
+        return self
 
 
 class TestCase(BaseModel):

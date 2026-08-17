@@ -13,6 +13,7 @@ from app.command_center.schemas import (
     PurchaseProgressResult,
     PurchaseTrackingScope,
     SkillDefinition,
+    SkillInput,
 )
 
 
@@ -470,3 +471,52 @@ def test_direct_tool_plan_rejects_more_than_three_steps():
             steps=[step, step, step, step],
             summary="too many steps",
         )
+
+
+def test_old_array_skill_input_remains_readable_without_schema():
+    value = SkillInput.model_validate(
+        {
+            "name": "items",
+            "type": "array",
+            "description": "明细",
+        }
+    )
+
+    assert value.json_schema is None
+
+
+def test_skill_input_json_schema_type_must_match_declared_type():
+    with pytest.raises(ValidationError, match="json_schema type"):
+        SkillInput.model_validate(
+            {
+                "name": "items",
+                "type": "array",
+                "description": "明细",
+                "json_schema": {"type": "object"},
+            }
+        )
+
+
+def test_old_skill_has_no_compensations_by_default():
+    assert SkillDefinition.model_validate(valid_skill_payload()).compensations == []
+
+
+def test_compensation_must_reference_an_existing_step():
+    payload = valid_skill_payload()
+    payload["compensations"] = [
+        {
+            "trigger_step_id": "missing-step",
+            "compensates_step_ids": ["create_purchase"],
+            "step": {
+                "step_id": "delete_purchase",
+                "name": "删除采购申请",
+                "tool_id": "connected_system:delete",
+                "input_bindings": {"path.id": "steps.create_purchase.id"},
+                "side_effect": "write",
+                "idempotency_key_template": "{skill_id}:{step_id}",
+            },
+        }
+    ]
+
+    with pytest.raises(ValidationError, match="trigger_step_id"):
+        SkillDefinition.model_validate(payload)
