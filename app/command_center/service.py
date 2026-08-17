@@ -68,6 +68,7 @@ class CommandCenterService:
         connection_handshakes: ConnectionHandshakeStore | None = None,
         system_skill_tester_factory: Any | None = None,
         purchase_tracking_graph_factory: Callable[[], Any] | None = None,
+        task_session_service: Any | None = None,
     ):
         self.repository = repository
         self.recorder = recorder
@@ -81,6 +82,7 @@ class CommandCenterService:
         self.connection_handshakes = connection_handshakes
         self.system_skill_tester_factory = system_skill_tester_factory
         self.purchase_tracking_graph_factory = purchase_tracking_graph_factory
+        self.task_session_service = task_session_service
         self._analysis_lock = threading.Lock()
         self._active_analyses: set[UUID] = set()
 
@@ -665,6 +667,37 @@ class CommandCenterService:
         self._attach_available_actions(payload)
         self.repository.save_task_run(run_id, payload)
         return payload
+
+    def create_task_session(self, request: Any) -> Any:
+        return self._require_task_session_service().create(request)
+
+    def add_task_session_message(self, session_id: UUID | str, request: Any) -> Any:
+        return self._require_task_session_service().add_message(
+            UUID(str(session_id)), request
+        )
+
+    def submit_task_session_inputs(self, session_id: UUID | str, request: Any) -> Any:
+        return self._require_task_session_service().submit_inputs(
+            UUID(str(session_id)), request
+        )
+
+    def confirm_task_session(self, session_id: UUID | str, request: Any) -> Any:
+        return self._require_task_session_service().confirm(
+            UUID(str(session_id)), request
+        )
+
+    def get_task_session(self, session_id: UUID | str) -> Any:
+        return self._require_task_session_service().get(UUID(str(session_id)))
+
+    def resume_pending_task_sessions(self) -> list[UUID]:
+        if self.task_session_service is None:
+            return []
+        return self.task_session_service.resume_pending()
+
+    def _require_task_session_service(self) -> Any:
+        if self.task_session_service is None:
+            raise RuntimeError("TaskSession runtime is not configured")
+        return self.task_session_service
 
     def select_task_object(
         self,

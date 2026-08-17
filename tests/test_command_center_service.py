@@ -1289,3 +1289,34 @@ def test_api_rejection_reason_is_returned_without_browser_fallback(tmp_path):
     assert result["analysis_stage"] == "completed"
     assert result["failure_reasons"] == ["字段对应关系证据不足"]
     assert "private model provider response" not in str(result)
+
+
+def test_command_center_service_delegates_task_session_operations(tmp_path):
+    class TaskSessions:
+        def create(self, request):
+            self.created = request
+            return "created"
+
+        def get(self, session_id):
+            self.got = session_id
+            return "loaded"
+
+        def resume_pending(self):
+            return [uuid4()]
+
+    task_sessions = TaskSessions()
+    service = CommandCenterService(
+        repository=CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}"),
+        recorder=Recorder(),
+        learning_graph=Graph({"status": "published"}),
+        execution_graph=Graph({"status": "succeeded"}),
+        task_session_service=task_sessions,
+    )
+    request = object()
+    session_id = uuid4()
+
+    assert service.create_task_session(request) == "created"
+    assert service.get_task_session(session_id) == "loaded"
+    assert service.resume_pending_task_sessions()
+    assert task_sessions.created is request
+    assert task_sessions.got == session_id
