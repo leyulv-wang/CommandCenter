@@ -47,3 +47,15 @@ class TaskRunRow(Base):
     run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     payload_json: Mapped[str] = mapped_column(Text)
+
+
+class TaskSessionRow(Base):
+    __tablename__ = "task_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )

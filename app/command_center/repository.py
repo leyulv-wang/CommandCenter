@@ -4,16 +4,21 @@ import json
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.command_center.database import Base, build_session_factory
 from app.command_center.models import (
     RecordingRow,
     SkillTestRow,
     SkillVersionRow,
+    TaskSessionRow,
     TaskRunRow,
 )
 from app.command_center.schemas import SkillDefinition
+from app.command_center.task_session_schemas import (
+    TaskSessionSnapshot,
+    TaskSessionState,
+)
 
 
 class ImmutableSkillError(RuntimeError):
@@ -21,6 +26,10 @@ class ImmutableSkillError(RuntimeError):
 
 
 class PublishGateError(RuntimeError):
+    pass
+
+
+class TaskSessionConflictError(RuntimeError):
     pass
 
 
@@ -214,6 +223,74 @@ class CommandCenterRepository:
 
     def get_task_run(self, run_id: UUID) -> dict[str, object]:
         return self._get_runtime_row(TaskRunRow, TaskRunRow.run_id, str(run_id))
+
+    def create_task_session(
+        self, snapshot: TaskSessionSnapshot
+    ) -> TaskSessionSnapshot:
+        with self.session_factory() as session:
+            if session.get(TaskSessionRow, str(snapshot.session_id)) is not None:
+                raise TaskSessionConflictError("task session already exists")
+            session.add(
+                TaskSessionRow(
+                    session_id=str(snapshot.session_id),
+                    state=snapshot.state,
+                    version=snapshot.version,
+                    payload_json=snapshot.model_dump_json(by_alias=True),
+                    updated_at=datetime.now(UTC),
+                )
+            )
+            session.commit()
+        return snapshot
+
+    def get_task_session(self, session_id: UUID) -> TaskSessionSnapshot:
+        with self.session_factory() as session:
+            row = session.get(TaskSessionRow, str(session_id))
+            if row is None:
+                raise KeyError(f"Task session not found: {session_id}")
+            return TaskSessionSnapshot.model_validate_json(row.payload_json)
+
+    def update_task_session(
+        self,
+        snapshot: TaskSessionSnapshot,
+        *,
+        expected_version: int,
+    ) -> TaskSessionSnapshot:
+        statement = (
+            update(TaskSessionRow)
+            .where(
+                TaskSessionRow.session_id == str(snapshot.session_id),
+                TaskSessionRow.version == expected_version,
+            )
+            .values(
+                state=snapshot.state,
+                version=snapshot.version,
+                payload_json=snapshot.model_dump_json(by_alias=True),
+                updated_at=datetime.now(UTC),
+            )
+        )
+        with self.session_factory() as session:
+            result = session.execute(statement)
+            if result.rowcount != 1:
+                session.rollback()
+                raise TaskSessionConflictError("task session version conflict")
+            session.commit()
+        return snapshot
+
+    def list_task_sessions_by_state(
+        self, states: set[TaskSessionState]
+    ) -> list[TaskSessionSnapshot]:
+        if not states:
+            return []
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(TaskSessionRow)
+                .where(TaskSessionRow.state.in_(sorted(states)))
+                .order_by(TaskSessionRow.updated_at, TaskSessionRow.session_id)
+            ).all()
+            return [
+                TaskSessionSnapshot.model_validate_json(row.payload_json)
+                for row in rows
+            ]
 
     def _save_runtime_row(
         self,
