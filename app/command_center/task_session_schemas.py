@@ -235,3 +235,39 @@ class TaskSessionView(StrictModel):
     plan_revision: int
     plan_hash: str | None = None
     next_interaction: NextInteraction
+
+
+class TaskIntentResolution(StrictModel):
+    status: Literal[
+        "matched",
+        "needs_skill_selection",
+        "needs_object_selection",
+        "not_applicable",
+    ]
+    skill_id: UUID | None = None
+    skill_version: int | None = None
+    candidate_skill_ids: list[UUID] = Field(default_factory=list, max_length=10)
+    candidate_object_ids: list[str] = Field(default_factory=list, max_length=50)
+    extracted_inputs: dict[str, Any] = Field(default_factory=dict)
+    summary: str
+
+
+class ContextObjectCandidate(StrictModel):
+    object_id: str
+    label: str
+    evidence_id: str
+    record_path: str
+
+
+class TaskContextInterpretation(StrictModel):
+    candidates: list[ContextObjectCandidate] = Field(
+        default_factory=list, max_length=50
+    )
+    trusted_value_paths: dict[str, str] = Field(default_factory=dict, max_length=50)
+    summary: str
+
+
+class TaskPlanProposal(StrictModel):
+    summary: str
+    target_object_ids: list[str]
+    argument_sources: dict[str, ParameterSource]

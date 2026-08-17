@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from typing import Any
 from uuid import uuid4
 
@@ -32,6 +33,14 @@ from app.command_center.schemas import (
     VerificationResult,
 )
 from app.command_center.tool_catalog import ToolDefinition, validate_tool_arguments
+from app.command_center.task_session_inputs import validate_input_value
+from app.command_center.task_session_schemas import (
+    ContextEvidence,
+    ParameterSource,
+    TaskContextInterpretation,
+    TaskIntentResolution,
+    TaskPlanProposal,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -390,6 +399,129 @@ class AgentSuite:
         )
         return result.output
 
+    def resolve_task_intent(
+        self,
+        *,
+        goal: str,
+        skills: list[SkillDefinition],
+        object_candidates: list[dict[str, Any]],
+    ) -> TaskIntentResolution:
+        skill_payload = [
+            {
+                "skill_id": str(skill.skill_id),
+                "version": skill.version,
+                "name": _truncate(skill.name, _SKILL_NAME_CHARS),
+                "description": _truncate(skill.description, _SKILL_SUMMARY_CHARS),
+                "inputs": [
+                    _compact_skill_input(item)
+                    for item in skill.inputs[:_SKILL_SUMMARY_INPUTS]
+                ],
+                "trigger_examples": [
+                    _truncate(value, _SKILL_EXAMPLE_CHARS)
+                    for value in skill.trigger_examples[:5]
+                ],
+            }
+            for skill in skills[:_SKILL_CANDIDATE_LIMIT]
+        ]
+        bounded_objects = [
+            _bounded_payload(item, max_items=20)
+            for item in object_candidates[:50]
+        ]
+        result = self.model.generate(
+            TaskIntentResolution,
+            (
+                "你是通用企业任务理解智能体。只能从候选 Skill 的精确 ID 和版本中选择，"
+                "根据业务语义和对象上下文判断；不能用关键词规则或编造对象。信息不足时"
+                "返回选择状态，无适用能力时返回 not_applicable。可从用户目标中提取已明确"
+                "表达的 Skill 输入，但不得猜测缺失值。"
+            ),
+            {
+                "goal": goal[:2_000],
+                "skills": skill_payload,
+                "object_candidates": bounded_objects,
+            },
+        )
+        _validate_task_intent(result, skills, object_candidates)
+        return result
+
+    def interpret_task_context(
+        self,
+        *,
+        goal: str,
+        skill: SkillDefinition,
+        evidence: list[ContextEvidence],
+    ) -> TaskContextInterpretation:
+        result = self.model.generate(
+            TaskContextInterpretation,
+            (
+                "你是可信上下文解释智能体。仅引用输入证据中真实存在的 evidence_id、"
+                "record_path 和可见对象标识，不生成新数据。识别候选业务对象及可供 Skill"
+                "输入使用的可信值路径；无法确定时保持为空。"
+            ),
+            {
+                "goal": goal[:2_000],
+                "skill": {
+                    "skill_id": str(skill.skill_id),
+                    "version": skill.version,
+                    "name": _truncate(skill.name, _SKILL_NAME_CHARS),
+                    "inputs": [
+                        _compact_skill_input(item)
+                        for item in skill.inputs[:_SKILL_DETAIL_INPUTS]
+                    ],
+                },
+                "evidence": [item.model_dump(mode="json") for item in evidence[:50]],
+            },
+        )
+        _validate_task_context_interpretation(result, evidence, skill)
+        return result
+
+    def propose_task_plan(
+        self,
+        *,
+        goal: str,
+        skill: SkillDefinition,
+        selected_object: dict[str, Any] | None,
+        inputs: dict[str, Any],
+        input_sources: dict[str, ParameterSource],
+        evidence: list[ContextEvidence],
+    ) -> TaskPlanProposal:
+        result = self.model.generate(
+            TaskPlanProposal,
+            (
+                "你是通用执行计划语义智能体。步骤、Tool、顺序和副作用由已发布 Skill"
+                "固定，你只为每个 <step_id>.<binding_target> 选择可追溯参数来源并概括计划。"
+                "来源只能是已提供的用户输入、可信上下文或前序步骤输出，不得发明值。"
+            ),
+            {
+                "goal": goal[:2_000],
+                "skill": {
+                    "skill_id": str(skill.skill_id),
+                    "version": skill.version,
+                    "name": _truncate(skill.name, _SKILL_NAME_CHARS),
+                    "steps": [step.model_dump(mode="json") for step in skill.steps],
+                },
+                "selected_object": _bounded_payload(selected_object or {}, max_items=50),
+                "inputs": _bounded_payload(inputs, max_items=50),
+                "input_sources": {
+                    name: source.model_dump(mode="json")
+                    for name, source in input_sources.items()
+                },
+                "evidence": [item.model_dump(mode="json") for item in evidence[:50]],
+            },
+        )
+        allowed_targets = {
+            f"{step.step_id}.{target}"
+            for step in skill.steps
+            for target in step.input_bindings
+        }
+        if set(result.argument_sources) != allowed_targets:
+            raise ValueError("plan proposal must cite every immutable Skill binding")
+        if selected_object and result.target_object_ids:
+            identity = str(selected_object.get("id", ""))
+            if set(result.target_object_ids) - {identity}:
+                raise ValueError("plan proposal references an unavailable target object")
+        return result
+
     def verify_tool_result(
         self,
         user_request: str,
@@ -557,6 +689,77 @@ class AgentSuite:
 
 def _truncate(value: str, limit: int) -> str:
     return value if len(value) <= limit else value[:limit]
+
+
+def _bounded_payload(value: dict[str, Any], *, max_items: int) -> dict[str, Any]:
+    return {
+        str(key)[:160]: item
+        for key, item in list(value.items())[:max_items]
+    }
+
+
+def _validate_task_intent(
+    result: TaskIntentResolution,
+    skills: list[SkillDefinition],
+    object_candidates: list[dict[str, Any]],
+) -> None:
+    by_identity = {(skill.skill_id, skill.version): skill for skill in skills}
+    if result.status == "matched":
+        skill = by_identity.get((result.skill_id, result.skill_version))
+        if skill is None:
+            raise ValueError("intent selected a Skill outside the available Skill set")
+        definitions = {item.name: item for item in skill.inputs}
+        unknown = set(result.extracted_inputs) - set(definitions)
+        if unknown:
+            raise ValueError("intent extracted inputs outside the selected Skill")
+        for name, value in result.extracted_inputs.items():
+            validate_input_value(definitions[name], value)
+    allowed_skill_ids = {skill.skill_id for skill in skills}
+    if set(result.candidate_skill_ids) - allowed_skill_ids:
+        raise ValueError("intent returned an unavailable Skill candidate")
+    allowed_object_ids = {
+        str(item.get("id")) for item in object_candidates if item.get("id") is not None
+    }
+    if set(result.candidate_object_ids) - allowed_object_ids:
+        raise ValueError("intent returned an unavailable object candidate")
+
+
+def _resolve_context_path(output: Any, path: str) -> tuple[bool, Any]:
+    value = output
+    for part in path.split(".") if path else []:
+        if isinstance(value, dict) and part in value:
+            value = value[part]
+        elif isinstance(value, list) and part.isdigit() and int(part) < len(value):
+            value = value[int(part)]
+        else:
+            return False, None
+    return True, value
+
+
+def _validate_task_context_interpretation(
+    result: TaskContextInterpretation,
+    evidence: list[ContextEvidence],
+    skill: SkillDefinition,
+) -> None:
+    by_id = {item.evidence_id: item for item in evidence}
+    identity_field = skill.action.object_id_field if skill.action else "id"
+    for candidate in result.candidates:
+        item = by_id.get(candidate.evidence_id)
+        if item is None:
+            raise ValueError("context candidate references unknown evidence")
+        found, record = _resolve_context_path(item.output, candidate.record_path)
+        if not found or not isinstance(record, dict):
+            raise ValueError("context candidate record path does not exist")
+        if str(record.get(identity_field, "")) != candidate.object_id:
+            raise ValueError("context candidate object ID does not match evidence")
+    for evidence_path in result.trusted_value_paths.values():
+        evidence_id, separator, record_path = evidence_path.partition(":")
+        item = by_id.get(evidence_id)
+        if not separator or item is None:
+            raise ValueError("trusted value path references unknown evidence")
+        found, _ = _resolve_context_path(item.output, record_path)
+        if not found:
+            raise ValueError("trusted value path does not exist")
 
 
 def _compact_skill_input(item: Any) -> dict[str, Any]:
