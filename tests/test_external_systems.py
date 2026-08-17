@@ -524,6 +524,8 @@ def test_purchase_follow_up_openapi_exposes_reusable_response_fields(tmp_path: P
     )
 
     schema = TestClient(app).get("/openapi.json").json()
+    operation = schema["paths"]["/api/purchase-follow-ups"]["post"]
+    assert operation["x-command-center-idempotency"] == "header"
     response_schema = schema["paths"]["/api/purchase-follow-ups"]["post"][
         "responses"
     ]["201"]["content"]["application/json"]["schema"]

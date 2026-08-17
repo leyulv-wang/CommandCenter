@@ -342,6 +342,28 @@ def test_openapi3_resolves_local_request_and_success_response_schemas():
     assert tool.response_schema["properties"]["follow_up_id"]["type"] == "string"
 
 
+def test_catalog_reads_supported_idempotency_extension():
+    path = "/api/expenses"
+    profile = profile_for("POST", path, side_effect="write")
+    document = {
+        "openapi": "3.1.0",
+        "paths": {
+            path: {
+                "post": {
+                    "operationId": "createExpense",
+                    "x-command-center-idempotency": "header",
+                }
+            }
+        },
+    }
+
+    tool = ToolCatalog.from_system_profile(document, profile).get(
+        "yifeng_mes:createExpense"
+    )
+
+    assert tool.idempotency_guarantee == "header"
+
+
 def test_catalog_matches_only_explicitly_allowlisted_operations():
     document = {
         "paths": {

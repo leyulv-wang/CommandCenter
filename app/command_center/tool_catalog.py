@@ -40,6 +40,7 @@ class ToolDefinition:
     credential_header: str | None = None
     parameters: tuple[ToolParameter, ...] = ()
     max_response_bytes: int = 8 * 1024 * 1024
+    idempotency_guarantee: Literal["none", "header", "intrinsic"] = "none"
 
     def with_path_parameters(self, values: dict[str, str]) -> ToolDefinition:
         return ToolDefinition(
@@ -59,6 +60,7 @@ class ToolDefinition:
             credential_header=self.credential_header,
             parameters=self.parameters,
             max_response_bytes=self.max_response_bytes,
+            idempotency_guarantee=self.idempotency_guarantee,
         )
 
 
@@ -165,6 +167,7 @@ class ToolCatalog:
                     "response_schema": tool.response_schema,
                     "credential_header": tool.credential_header,
                     "parameters": [asdict(parameter) for parameter in tool.parameters],
+                    "idempotency_guarantee": tool.idempotency_guarantee,
                 }
                 for tool in self._tools.values()
             ],
@@ -262,6 +265,11 @@ def _tool_from_operation(
     credential_header: str | None,
     max_response_bytes: int,
 ) -> ToolDefinition:
+    idempotency_guarantee = operation.get(
+        "x-command-center-idempotency", "none"
+    )
+    if idempotency_guarantee not in {"none", "header", "intrinsic"}:
+        raise ValueError("unsupported Tool idempotency guarantee")
     parameter_items = _merged_parameter_items(path_item, operation)
     parameters = _tool_parameters(parameter_items)
     content_type, body_schema = _request_body(document, operation, parameter_items)
@@ -287,6 +295,7 @@ def _tool_from_operation(
         credential_header=credential_header,
         parameters=parameters,
         max_response_bytes=max_response_bytes,
+        idempotency_guarantee=idempotency_guarantee,
     )
 
 

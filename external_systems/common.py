@@ -160,6 +160,7 @@ def create_external_app(
         "/api/purchase-follow-ups",
         status_code=201,
         response_model=PurchaseFollowUpRecord,
+        openapi_extra={"x-command-center-idempotency": "header"},
     )
     def create_purchase_follow_up(
         request: PurchaseFollowUpRequest,

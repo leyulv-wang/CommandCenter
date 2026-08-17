@@ -46,7 +46,7 @@ class ToolExecutor:
         for name, value in command.arguments.get("path", {}).items():
             path = path.replace(f"{{{name}}}", str(value))
         headers: dict[str, str] = {}
-        if command.idempotency_key:
+        if command.idempotency_key and tool.idempotency_guarantee == "header":
             headers["Idempotency-Key"] = command.idempotency_key
         if tool.credential_header:
             try:
@@ -77,8 +77,10 @@ class ToolExecutor:
                     ended_at=datetime.now(UTC),
                     request_summary={"method": tool.method, "path": path},
                     error={
+                        "category": "permission",
                         "code": "MissingCredential",
                         "message": "required request credential is unavailable",
+                        "status_code": None,
                     },
                     retry_safe=tool.side_effect == "read",
                 )
@@ -107,6 +109,9 @@ class ToolExecutor:
             is_write = tool.side_effect == "write"
             side_effect: dict[str, Any] = {"occurred": is_write}
             if is_write:
+                protected = bool(command.idempotency_key) and (
+                    tool.idempotency_guarantee in {"header", "intrinsic"}
+                )
                 side_effect.update(
                     {
                         "operation": {
@@ -115,7 +120,7 @@ class ToolExecutor:
                             "path": path,
                         },
                         "idempotency": {
-                            "protected": bool(command.idempotency_key),
+                            "protected": protected,
                             "key_fingerprint": (
                                 hashlib.sha256(
                                     command.idempotency_key.encode("utf-8")
@@ -137,7 +142,13 @@ class ToolExecutor:
                 response_summary={"status_code": response.status_code},
                 normalized_output=payload,
                 side_effect=side_effect,
-                retry_safe=bool(command.idempotency_key) or not is_write,
+                retry_safe=(
+                    not is_write
+                    or (
+                        bool(command.idempotency_key)
+                        and tool.idempotency_guarantee in {"header", "intrinsic"}
+                    )
+                ),
             )
         except (httpx.HTTPError, ValueError) as exc:
             if (
@@ -157,22 +168,65 @@ class ToolExecutor:
                 started_at=started_at,
                 ended_at=datetime.now(UTC),
                 request_summary={"method": tool.method, "path": path},
-                error={
-                    "code": (
-                        "ResponseTooLarge"
-                        if isinstance(exc, ResponseTooLargeError)
-                        else type(exc).__name__
-                    ),
-                    "message": str(exc) or "response exceeded the configured limit",
-                },
+                error=_safe_error_payload(exc),
                 retry_safe=(
-                    bool(command.idempotency_key) or tool.side_effect == "read"
+                    tool.side_effect == "read"
+                    or (
+                        bool(command.idempotency_key)
+                        and tool.idempotency_guarantee in {"header", "intrinsic"}
+                    )
                 ),
             )
 
 
 class ResponseTooLargeError(ValueError):
     pass
+
+
+def _safe_error_payload(exc: Exception) -> dict[str, Any]:
+    status_code = (
+        exc.response.status_code
+        if isinstance(exc, httpx.HTTPStatusError)
+        else None
+    )
+    if isinstance(exc, ResponseTooLargeError):
+        return {
+            "category": "protocol",
+            "code": "ResponseTooLarge",
+            "status_code": None,
+            "message": "response exceeded the configured limit",
+        }
+    if isinstance(exc, httpx.HTTPStatusError):
+        if status_code in {502, 503, 504}:
+            category = "transient"
+        elif status_code in {401, 403}:
+            category = "permission"
+        elif status_code in {400, 409, 422}:
+            category = "business"
+        else:
+            category = "protocol"
+        return {
+            "category": category,
+            "code": "HTTPStatusError",
+            "status_code": status_code,
+            "message": f"remote service returned HTTP {status_code}",
+        }
+    if isinstance(
+        exc,
+        (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError),
+    ):
+        return {
+            "category": "transient",
+            "code": type(exc).__name__,
+            "status_code": None,
+            "message": "temporary remote transport failure",
+        }
+    return {
+        "category": "protocol",
+        "code": "InvalidJSON" if isinstance(exc, ValueError) else type(exc).__name__,
+        "status_code": None,
+        "message": "remote response could not be processed",
+    }
 
 
 def _omit_optional_nulls(value: Any, schema: dict[str, Any]) -> Any:

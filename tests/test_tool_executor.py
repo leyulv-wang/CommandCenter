@@ -43,6 +43,7 @@ def test_executor_sends_idempotency_header_and_returns_normalized_output():
                     "/api/tasks/{task_id}/purchase-link": {
                         "post": {
                             "operationId": "link_purchase",
+                            "x-command-center-idempotency": "header",
                             "requestBody": {
                                 "content": {"application/json": {"schema": {"type": "object"}}}
                             },
@@ -88,6 +89,7 @@ def test_executor_describes_known_write_without_exposing_idempotency_key():
                     "/api/objects": {
                         "post": {
                             "operationId": "create_object",
+                            "x-command-center-idempotency": "header",
                             "requestBody": {
                                 "content": {
                                     "application/json": {
@@ -324,6 +326,7 @@ def test_executor_omits_optional_nested_nulls_from_json_body():
         path_template="/follow-ups",
         content_type="application/json",
         side_effect="write",
+        idempotency_guarantee="header",
         body_schema={
             "type": "object",
             "required": ["title", "items"],
@@ -381,3 +384,72 @@ def test_executor_omits_optional_nested_nulls_from_json_body():
         "title": "follow-up",
         "items": [{"material_code": "M-1", "quantity": 2, "unit": "PCS"}],
     }
+
+
+def test_executor_does_not_send_or_trust_key_for_undeclared_idempotency():
+    observed = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["idempotency"] = request.headers.get("Idempotency-Key")
+        return httpx.Response(200, json={"id": "created-1"})
+
+    tool = ToolDefinition(
+        tool_id="finance:create",
+        system_code="finance",
+        operation_id="create",
+        method="POST",
+        base_url="http://finance",
+        path_template="/records",
+        content_type="application/json",
+        side_effect="write",
+        idempotency_guarantee="none",
+    )
+    result = ToolExecutor(
+        ToolCatalog([tool]),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    ).execute(
+        ExecutionCommand(
+            run_id=uuid4(),
+            step_id="create",
+            tool_id=tool.tool_id,
+            arguments={"body": {}},
+            idempotency_key="not-contractually-supported",
+            reason="create",
+        )
+    )
+
+    assert observed["idempotency"] is None
+    assert result.retry_safe is False
+
+
+def test_executor_classifies_business_failure_without_response_body():
+    tool = ToolDefinition(
+        tool_id="finance:create",
+        system_code="finance",
+        operation_id="create",
+        method="POST",
+        base_url="http://finance",
+        path_template="/records",
+        content_type="application/json",
+        side_effect="write",
+    )
+    result = ToolExecutor(
+        ToolCatalog([tool]),
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(409, json={"secret": "do-not-persist"})
+            )
+        ),
+    ).execute(
+        ExecutionCommand(
+            run_id=uuid4(),
+            step_id="create",
+            tool_id=tool.tool_id,
+            arguments={"body": {}},
+            reason="create",
+        )
+    )
+
+    assert result.error["category"] == "business"
+    assert result.error["status_code"] == 409
+    assert "do-not-persist" not in result.model_dump_json()
