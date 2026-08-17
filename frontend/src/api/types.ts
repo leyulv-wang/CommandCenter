@@ -242,3 +242,90 @@ export interface SystemSkillVerificationView {
   status: 'api_candidate' | 'verified_candidate'
   test_results: Array<Record<string, unknown>>
 }
+
+export type TaskSessionState =
+  | 'understanding'
+  | 'resolving_context'
+  | 'collecting_input'
+  | 'awaiting_confirmation'
+  | 'executing'
+  | 'verifying'
+  | 'succeeded'
+  | 'failed'
+
+export interface JsonSchema {
+  type: 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean'
+  title?: string
+  format?: 'date' | 'date-time'
+  enum?: Array<string | number | boolean>
+  properties?: Record<string, JsonSchema>
+  required?: string[]
+  items?: JsonSchema
+  oneOf?: unknown[]
+  anyOf?: unknown[]
+  allOf?: unknown[]
+  $ref?: string
+}
+
+export interface SelectionOption {
+  value: string
+  label: string
+  description?: string | null
+}
+
+export interface PlannedStepView {
+  step_id: string
+  name: string
+  system: string
+  arguments: Record<string, unknown>
+}
+
+export interface StepResultView {
+  step_id: string
+  name?: string | null
+  status: string
+  summary?: string | null
+}
+
+export type NextInteraction =
+  | { type: 'message'; message: string }
+  | { type: 'question'; prompt: string; field_names: string[] }
+  | { type: 'selection'; prompt: string; field_name: string; options: SelectionOption[] }
+  | { type: 'form'; title: string; schema: JsonSchema; values: Record<string, unknown> }
+  | {
+      type: 'confirmation'
+      title: string
+      summary: string
+      plan_revision: number
+      plan_hash: string
+      confirmation_token: string
+      systems: string[]
+      target_objects: string[]
+      write_steps: PlannedStepView[]
+    }
+  | {
+      type: 'result'
+      status: 'succeeded' | 'failed' | 'partial_failure' | 'verification_incomplete' | 'unknown'
+      code?: string | null
+      summary: string
+      steps: StepResultView[]
+    }
+
+export interface TaskSessionView {
+  session_id: string
+  state: TaskSessionState
+  version: number
+  goal: string
+  plan_revision: number
+  plan_hash?: string | null
+  next_interaction: NextInteraction
+}
+
+export interface TaskSessionHint {
+  action_id?: string
+  skill_id?: string
+  skill_version?: number
+  parent_run_id?: string
+  selected_record_id?: string
+  selected_object?: Record<string, unknown>
+}

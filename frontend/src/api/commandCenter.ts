@@ -6,6 +6,8 @@ import type {
   TaskRunView,
   SystemConnectionView,
   SystemSkillVerificationView,
+  TaskSessionHint,
+  TaskSessionView,
 } from './types'
 
 
@@ -93,6 +95,51 @@ export function selectTaskObject(runId: string, objectId: string) {
 
 export function getTaskRun(runId: string) {
   return request<TaskRunView>(`/task-runs/${runId}`)
+}
+
+export function createTaskSession(payload: { goal: string; hint?: TaskSessionHint }) {
+  return request<TaskSessionView>('/task-sessions', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function sendTaskSessionMessage(sessionId: string, version: number, message: string) {
+  return request<TaskSessionView>(`/task-sessions/${sessionId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ version, message }),
+  })
+}
+
+export function submitTaskSessionInputs(
+  sessionId: string,
+  version: number,
+  values: Record<string, unknown>,
+) {
+  return request<TaskSessionView>(`/task-sessions/${sessionId}/inputs`, {
+    method: 'POST',
+    body: JSON.stringify({ version, values }),
+  })
+}
+
+export function confirmTaskSession(
+  sessionId: string,
+  payload: {
+    version: number
+    plan_revision: number
+    plan_hash: string
+    confirmation_token: string
+    approved: boolean
+  },
+) {
+  return request<TaskSessionView>(`/task-sessions/${sessionId}/confirmations`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function getTaskSession(sessionId: string) {
+  return request<TaskSessionView>(`/task-sessions/${sessionId}`)
 }
 
 export function getSystemConnection(systemCode: string) {
