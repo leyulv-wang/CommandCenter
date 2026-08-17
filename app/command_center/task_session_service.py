@@ -328,6 +328,7 @@ class TaskSessionService:
         selected = _find_skill(
             skills, snapshot.selected_skill_id, snapshot.selected_skill_version
         )
+        skill_was_pinned = selected is not None
         if selected is None and snapshot.selected_skill_id is not None:
             return self._fail_no_skill(snapshot)
         if selected is None:
@@ -383,6 +384,30 @@ class TaskSessionService:
                     "input_sources": sources,
                 }
             )
+        elif skill_was_pinned:
+            resolution = self.agents.resolve_task_intent(
+                goal=snapshot.goal,
+                skills=[selected],
+                object_candidates=snapshot.object_candidates,
+            )
+            if (
+                resolution.status == "matched"
+                and resolution.skill_id == selected.skill_id
+                and resolution.skill_version == selected.version
+            ):
+                definitions = {item.name: item for item in selected.inputs}
+                extracted = dict(snapshot.inputs)
+                sources = dict(snapshot.input_sources)
+                for name, value in resolution.extracted_inputs.items():
+                    if name not in definitions:
+                        raise ValueError("agent extracted an unknown pinned Skill input")
+                    extracted[name] = validate_input_value(definitions[name], value)
+                    sources[name] = ParameterSource(
+                        kind="user_input", reference="goal"
+                    )
+                snapshot = snapshot.model_copy(
+                    update={"inputs": extracted, "input_sources": sources}
+                )
         return self._transition(
             snapshot,
             "resolving_context",

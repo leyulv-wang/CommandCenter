@@ -68,7 +68,7 @@ class ResumableTaskExecutor:
         for declared, planned in zip(skill.steps, plan.steps, strict=True):
             if planned.step_id in successful:
                 continue
-            command = self._materialize_command(declared, planned)
+            command = self._materialize_command(declared, planned, outputs)
             attempt = 1
             while True:
                 raw_result = self.executor.execute(command)
@@ -113,7 +113,11 @@ class ResumableTaskExecutor:
         )
 
     @staticmethod
-    def _materialize_command(declared: Any, planned: PlannedStep) -> ExecutionCommand:
+    def _materialize_command(
+        declared: Any,
+        planned: PlannedStep,
+        outputs: dict[str, Any],
+    ) -> ExecutionCommand:
         if (declared.tool_id, declared.side_effect) != (
             planned.tool_id,
             planned.side_effect,
@@ -127,7 +131,7 @@ class ResumableTaskExecutor:
             skill_version=None,
             step_id=planned.step_id,
             tool_id=planned.tool_id,
-            arguments=deepcopy(planned.arguments),
+            arguments=_resolve_step_outputs(planned.arguments, outputs),
             idempotency_key=planned.idempotency_key,
             reason=planned.name,
         )
@@ -180,6 +184,32 @@ def _argument_targets(arguments: dict[str, Any]) -> set[str]:
         if isinstance(values, dict)
         for name in values
     }
+
+
+def _resolve_step_outputs(value: Any, outputs: dict[str, Any]) -> Any:
+    if isinstance(value, dict) and set(value) == {"$step_output"}:
+        expression = value["$step_output"]
+        if not isinstance(expression, str):
+            raise ValueError("step output binding must be a string")
+        parts = expression.split(".")
+        if len(parts) < 4 or parts[0] != "steps" or parts[2] != "output":
+            raise ValueError("invalid step output binding")
+        resolved: Any = outputs.get(parts[1])
+        if resolved is None:
+            raise ValueError("referenced step output is unavailable")
+        for part in parts[3:]:
+            if isinstance(resolved, dict) and part in resolved:
+                resolved = resolved[part]
+            elif isinstance(resolved, list) and part.isdigit() and int(part) < len(resolved):
+                resolved = resolved[int(part)]
+            else:
+                raise ValueError("referenced step output path is unavailable")
+        return deepcopy(resolved)
+    if isinstance(value, dict):
+        return {key: _resolve_step_outputs(item, outputs) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_resolve_step_outputs(item, outputs) for item in value]
+    return deepcopy(value)
 
 
 def _redact_step_result(

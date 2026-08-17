@@ -141,6 +141,40 @@ def test_executor_retries_transient_idempotent_write_with_same_key():
     assert executor.calls[0].idempotency_key == executor.calls[1].idempotency_key
 
 
+def test_executor_resolves_prior_step_output_bindings_at_runtime():
+    skill = _skill([("lookup", "read"), ("create", "write")])
+    skill.steps[1].input_bindings = {
+        "body.employee_id": "steps.lookup.output.employee.id"
+    }
+    plan = _plan([("lookup", "read"), ("create", "write")])
+    plan.steps[1].arguments = {
+        "body": {
+            "employee_id": {
+                "$step_output": "steps.lookup.output.employee.id"
+            }
+        }
+    }
+    plan.steps[1].argument_sources = {}
+    executor = SequenceExecutor(
+        _result("succeeded", output={"employee": {"id": "E-9"}}),
+        _result("succeeded", occurred=True, output={"id": "expense-1"}),
+    )
+
+    outcome = ResumableTaskExecutor(
+        executor,
+        redactor=TraceRedactor(fingerprint_key=b"test"),
+        backoff=lambda _: None,
+    ).execute(
+        plan=plan,
+        skill=skill,
+        prior_results=[],
+        checkpoint=lambda _: None,
+    )
+
+    assert outcome.status == "succeeded"
+    assert executor.calls[1].arguments["body"]["employee_id"] == "E-9"
+
+
 def test_executor_stops_after_business_failure_without_future_writes():
     executor = SequenceExecutor(
         _result("succeeded", occurred=True),
