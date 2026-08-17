@@ -1,0 +1,16 @@
+[Unit]
+Description=CommandCenter Public Gateway
+After=network-online.target order-central-api.service order-external-purchase.service order-external-office.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/CommandCenter-current
+ExecStartPre=/usr/sbin/nginx -t -c /root/CommandCenter-current/deploy/nginx.conf
+ExecStart=/usr/sbin/nginx -c /root/CommandCenter-current/deploy/nginx.conf -g "daemon off;"
+ExecReload=/usr/sbin/nginx -s reload -c /root/CommandCenter-current/deploy/nginx.conf
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=CommandCenter API
+After=network-online.target order-external-purchase.service order-external-office.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/CommandCenter-current
+EnvironmentFile=/etc/order-central-control.env
+ExecStart=/root/CommandCenter-current/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 18001
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

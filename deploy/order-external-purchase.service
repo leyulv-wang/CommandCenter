@@ -1,0 +1,15 @@
+[Unit]
+Description=CommandCenter Purchase Demo System
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/CommandCenter-current
+EnvironmentFile=/etc/order-central-control.env
+ExecStart=/root/CommandCenter-current/.venv/bin/uvicorn external_systems.connected_system.main:app --host 0.0.0.0 --port 8101
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
