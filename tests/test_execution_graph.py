@@ -9,17 +9,19 @@ from app.command_center.execution_graph import (
     LocalBusinessReader,
     UserRequestReader,
     build_execution_graph,
+    executable_skill_set,
 )
 from app.command_center.schemas import (
     DirectToolPlan,
     DirectToolVerification,
     SkillDefinition,
+    SkillInput,
     StepResult,
     TaskMatchDecision,
     VerificationResult,
 )
 from app.command_center.testing import SkillRunResult
-from app.command_center.tool_catalog import ToolDefinition, ToolParameter
+from app.command_center.tool_catalog import ToolCatalog, ToolDefinition, ToolParameter
 from tests.test_command_center_schemas import valid_skill_payload
 
 
@@ -61,7 +63,8 @@ class MatchingAgent:
 
 
 class RecordingRunner:
-    def __init__(self):
+    def __init__(self, status="succeeded"):
+        self.status = status
         self.tasks = []
         self.literals = []
 
@@ -69,9 +72,13 @@ class RecordingRunner:
         self.tasks.append(task)
         self.literals.append(literals)
         return SkillRunResult(
-            status="succeeded",
+            status=self.status,
             step_results=[],
-            outputs={"create_purchase": {"data": {"id": "WORKFLOW-0001"}}},
+            outputs=(
+                {"create_purchase": {"data": {"id": "WORKFLOW-0001"}}}
+                if self.status == "succeeded"
+                else {}
+            ),
         )
 
 
@@ -195,6 +202,77 @@ def published_skill() -> SkillDefinition:
     return SkillDefinition.model_validate(payload)
 
 
+def test_executable_skill_generalizes_recorded_array_indexes_from_tool_schema():
+    payload = published_skill().model_dump(mode="json")
+    payload["status"] = "verified_candidate"
+    payload["inputs"] = [
+        SkillInput(name="title", type="string", description="title").model_dump(),
+        SkillInput(
+            name="materialCode1", type="string", description="first material"
+        ).model_dump(),
+        SkillInput(
+            name="quantity1", type="number", description="first quantity"
+        ).model_dump(),
+    ]
+    payload["steps"] = [
+        {
+            "step_id": "create_follow_up",
+            "name": "create follow-up",
+            "tool_id": "connected_system:create_follow_up",
+            "input_bindings": {
+                "body.title": "task.content.title",
+                "body.items.0.material_code": "task.content.materialCode1",
+                "body.items.0.quantity": "task.content.quantity1",
+            },
+            "output_bindings": {},
+            "side_effect": "write",
+            "idempotency_key_template": "follow-up",
+        }
+    ]
+    skill = SkillDefinition.model_validate(payload)
+    catalog = ToolCatalog(
+        [
+            ToolDefinition(
+                tool_id="connected_system:create_follow_up",
+                system_code="connected_system",
+                operation_id="create_follow_up",
+                method="POST",
+                base_url="http://connected",
+                path_template="/follow-ups",
+                content_type="application/json",
+                side_effect="write",
+                body_schema={
+                    "type": "object",
+                    "required": ["title", "items"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "material_code": {"type": "string"},
+                                    "quantity": {"type": "number"},
+                                },
+                            },
+                        },
+                    },
+                },
+            )
+        ]
+    )
+
+    executable = executable_skill_set([], [skill], catalog)
+
+    assert len(executable) == 1
+    assert executable[0].steps[0].input_bindings == {
+        "body.title": "task.content.title",
+        "body.items": "task.content.items",
+    }
+    assert {item.name for item in executable[0].inputs} == {"title", "items"}
+    assert next(item for item in executable[0].inputs if item.name == "items").type == "array"
+
+
 def test_execution_graph_requires_employee_choice_for_multiple_objects():
     tasks = [
         {"task_id": "OFFICE-1", "content": {"item_name": "签字笔"}},
@@ -240,6 +318,25 @@ def test_execution_graph_executes_selected_skill_and_verifies_result():
     assert result["final_response"]["summary"] == "采购申请创建完成"
     assert runner.tasks[0]["system_code"] == "connected_system"
     assert runner.literals[0]["item_name"] == "打印纸"
+
+
+def test_execution_graph_reports_failed_skill_step_to_the_caller():
+    runner = RecordingRunner(status="failed")
+    graph = build_execution_graph(
+        ExecutionDependencies(
+            skills=lambda: [published_skill()],
+            business_reader=UserRequestReader(),
+            agents=MatchingAgent(["user-request"]),
+            runner=runner,
+        )
+    )
+
+    result = graph.invoke({"user_request": "create purchase"})
+
+    assert result["status"] == "failed"
+    assert result["execution_mode"] == "skill"
+    assert result["errors"] == ["Skill 步骤执行失败"]
+    assert result["final_response"]["summary"] == "Skill 步骤执行失败，未完成业务操作"
 
 
 def test_execution_graph_merges_agent_inputs_into_generic_task_context():
@@ -331,6 +428,35 @@ def test_execution_graph_falls_back_to_existing_skill_when_tool_not_applicable()
 
     assert result["status"] == "succeeded"
     assert result["execution_mode"] == "skill"
+    assert len(skill_runner.tasks) == 1
+
+
+def test_trusted_follow_up_row_action_skips_readonly_direct_tool_planning():
+    agents = DirectAgent()
+    direct_runner = DirectRunner()
+    skill_runner = RecordingRunner()
+    graph = build_execution_graph(
+        ExecutionDependencies(
+            skills=lambda: [published_skill()],
+            business_reader=UserRequestReader(),
+            agents=agents,
+            runner=skill_runner,
+            tools=lambda: [read_tool()],
+            direct_runner=direct_runner,
+        )
+    )
+
+    result = graph.invoke(
+        {
+            "user_request": "create purchase follow-up",
+            "task_context": {"requested_capability": "purchase_follow_up"},
+        }
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["execution_mode"] == "skill"
+    assert agents.task_contexts == []
+    assert direct_runner.calls == []
     assert len(skill_runner.tasks) == 1
 
 

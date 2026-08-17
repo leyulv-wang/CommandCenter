@@ -7,7 +7,7 @@ const api = vi.hoisted(() => ({
   createTaskRun: vi.fn(),
   createTaskDetailRun: vi.fn(),
   createPurchaseProgressRun: vi.fn(),
-  createPurchaseFollowUpRun: vi.fn(),
+  executeTaskAction: vi.fn(),
   selectTaskObject: vi.fn(),
 }))
 
@@ -20,6 +20,16 @@ describe('NaturalLanguageTaskPanel', () => {
       user_request: '查询采购申请列表',
       status: 'succeeded',
       execution_mode: 'tool',
+      available_actions: [
+        {
+          action_id: 'create-purchase-follow-up',
+          label: '创建采购跟进任务',
+          record_id: 'A-1',
+          skill_id: 'skill-1',
+          skill_version: 1,
+          confirmation: 'required',
+        },
+      ],
       final_response: {
         summary: '查询完成',
         outputs: {
@@ -69,7 +79,7 @@ describe('NaturalLanguageTaskPanel', () => {
         },
       },
     })
-    api.createPurchaseFollowUpRun.mockReset().mockResolvedValue({
+    api.executeTaskAction.mockReset().mockResolvedValue({
       run_id: 'follow-up-1',
       parent_run_id: 'run-1',
       selected_record_id: 'A-1',
@@ -186,11 +196,36 @@ describe('NaturalLanguageTaskPanel', () => {
     await wrapper.get('.command-input button').trigger('click')
     await flushPromises()
 
-    await wrapper.get('[data-testid="create-follow-up"]').trigger('click')
+    await wrapper.get('[data-testid="execute-action"]').trigger('click')
     await flushPromises()
 
-    expect(api.createPurchaseFollowUpRun).toHaveBeenCalledWith('run-1', 'A-1')
+    expect(api.executeTaskAction).toHaveBeenCalledWith(
+      'run-1',
+      'create-purchase-follow-up',
+      'A-1',
+    )
     expect(wrapper.text()).toContain('已在采购业务系统创建跟进任务')
     expect(wrapper.text()).toContain('FOLLOW-UP-0001')
+  })
+
+  it('shows a failed cross-system follow-up returned in a successful HTTP response', async () => {
+    api.executeTaskAction.mockResolvedValueOnce({
+      run_id: 'follow-up-failed',
+      parent_run_id: 'run-1',
+      selected_record_id: 'A-1',
+      status: 'failed',
+      errors: ['Skill 必填输入不完整'],
+    })
+    const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
+    await wrapper.get('textarea').setValue('查询采购申请列表')
+    await wrapper.get('.command-input button').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="execute-action"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="action-error"]').text()).toContain(
+      'Skill 必填输入不完整',
+    )
   })
 })

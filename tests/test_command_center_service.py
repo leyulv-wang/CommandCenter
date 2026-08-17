@@ -8,12 +8,13 @@ from pydantic import SecretStr
 
 from app.command_center.repository import CommandCenterRepository
 from app.command_center.router import CreateRecordingRequest, CreateTaskRunRequest
-from app.command_center.schemas import OperationTrace
+from app.command_center.schemas import OperationTrace, SkillDefinition
 from app.command_center.service import CommandCenterService, _safe_prior_analysis_reasons
 from app.command_center.extension_recorder import ExtensionRecorder
 from app.command_center.schemas import ExtensionEventBatch
 from app.command_center.system_profiles import ProfileLimits, SystemProfile, ToolPermission
 from app.command_center.tool_catalog import ToolCatalog, ToolDefinition
+from tests.test_command_center_schemas import valid_skill_payload
 
 
 class Recorder:
@@ -38,6 +39,33 @@ class Graph:
     def invoke(self, state):
         self.state = state
         return self.result
+
+
+class SequenceGraph:
+    def __init__(self, *results):
+        self.results = list(results)
+        self.states = []
+
+    def invoke(self, state):
+        self.states.append(state)
+        return self.results.pop(0)
+
+
+def action_skill() -> SkillDefinition:
+    payload = valid_skill_payload()
+    payload["status"] = "verified_candidate"
+    payload["action"] = {
+        "action_id": "create-follow-up",
+        "label": "创建跟进任务",
+        "instruction": "为所选业务对象创建跟进任务",
+        "object_id_field": "id",
+        "required_record_fields": ["id", "applyNo"],
+        "context_request": "读取所选业务对象及其全部明细，仅使用只读 Tool",
+        "requires_context_records": True,
+        "source_reference_field": "applyNo",
+        "confirmation": "required",
+    }
+    return SkillDefinition.model_validate(payload)
 
 
 class FailingGraph:
@@ -252,6 +280,104 @@ def test_service_persists_natural_language_task_run(tmp_path):
     )
 
 
+def test_service_projects_skill_actions_onto_matching_result_rows(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    skill = action_skill()
+    repository.save_candidate_skill(skill)
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=Graph(
+            {
+                "status": "succeeded",
+                "execution_mode": "tool",
+                "final_response": {
+                    "summary": "查询完成",
+                    "outputs": {
+                        "query": {
+                            "result": {
+                                "records": [
+                                    {"id": "row-1", "applyNo": "CGSQ01"},
+                                    {"id": "row-2"},
+                                ]
+                            }
+                        }
+                    },
+                },
+            }
+        ),
+    )
+
+    run = service.create_task_run(CreateTaskRunRequest(user_request="查询业务记录"))
+
+    assert run["available_actions"] == [
+        {
+            "action_id": "create-follow-up",
+            "label": "创建跟进任务",
+            "record_id": "row-1",
+            "skill_id": str(skill.skill_id),
+            "skill_version": 1,
+            "confirmation": "required",
+        }
+    ]
+
+
+def test_service_executes_server_issued_action_with_generic_context(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    skill = action_skill()
+    repository.save_candidate_skill(skill)
+    parent_run_id = uuid4()
+    repository.save_task_run(
+        parent_run_id,
+        {
+            "run_id": str(parent_run_id),
+            "status": "succeeded",
+            "final_response": {
+                "outputs": {
+                    "query": {
+                        "result": {
+                            "records": [{"id": "row-1", "applyNo": "CGSQ01"}]
+                        }
+                    }
+                }
+            },
+        },
+    )
+    execution = SequenceGraph(
+        {
+            "status": "succeeded",
+            "execution_mode": "tool",
+            "final_response": {
+                "summary": "明细读取完成",
+                "outputs": {"detail": {"result": {"records": [{"code": "M1"}]}}},
+                "tool_evidence": [],
+            },
+        },
+        {
+            "status": "succeeded",
+            "execution_mode": "skill",
+            "final_response": {"summary": "动作完成", "outputs": {}},
+        },
+    )
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=execution,
+    )
+
+    result = service.execute_task_action(parent_run_id, "create-follow-up", "row-1")
+
+    assert result["status"] == "succeeded"
+    assert result["action_id"] == "create-follow-up"
+    assert execution.states[0]["task_context"]["selected_record"]["id"] == "row-1"
+    action_context = execution.states[1]["task_context"]
+    assert action_context["required_skill_id"] == str(skill.skill_id)
+    assert action_context["source_reference"] == "CGSQ01"
+    assert action_context["action_context_outputs"]["detail"]["result"]["records"]
+
+
 def test_service_creates_persisted_detail_run_from_saved_list_record(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
     parent_run_id = uuid4()
@@ -390,7 +516,30 @@ def test_service_creates_purchase_progress_run_from_saved_record(tmp_path):
 
 def test_service_creates_purchase_follow_up_from_trusted_saved_record(tmp_path):
     repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
-    execution = Graph({"status": "succeeded", "final_response": {"summary": "已创建跟进任务"}})
+    execution = SequenceGraph(
+        {
+            "status": "succeeded",
+            "execution_mode": "tool",
+            "final_response": {
+                "summary": "已读取详情",
+                "outputs": {
+                    "detail": {
+                        "result": {
+                            "records": [
+                                {
+                                    "articleNo": "M-1",
+                                    "purchaseNumber": 2,
+                                    "unit": "PCS",
+                                }
+                            ]
+                        }
+                    }
+                },
+                "tool_evidence": [{"tool_id": "mes:detail"}],
+            },
+        },
+        {"status": "succeeded", "final_response": {"summary": "已创建跟进任务"}},
+    )
     service = CommandCenterService(
         repository=repository,
         recorder=Recorder(),
@@ -414,7 +563,115 @@ def test_service_creates_purchase_follow_up_from_trusted_saved_record(tmp_path):
 
     assert result["status"] == "succeeded"
     assert result["selected_record_id"] == "row-1"
-    assert execution.state["task_context"]["selected_record"]["applyNo"] == "CGSQ01"
+    assert execution.states[0]["task_context"]["selected_record"]["applyNo"] == "CGSQ01"
+    follow_up_context = execution.states[1]["task_context"]
+    assert follow_up_context["selected_record"]["applyNo"] == "CGSQ01"
+    assert follow_up_context["mes_detail_outputs"]["detail"]["result"]["records"][0][
+        "articleNo"
+    ] == "M-1"
+    assert follow_up_context["record_purpose"] == "formal"
+    assert follow_up_context["source_reference"] == "CGSQ01"
+    assert result["preparation"]["tool_evidence"] == [{"tool_id": "mes:detail"}]
+
+
+def test_service_stops_follow_up_when_readonly_mes_detail_preparation_fails(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    execution = SequenceGraph(
+        {"status": "failed", "execution_mode": "tool", "errors": ["detail failed"]}
+    )
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=execution,
+    )
+    parent_run_id = uuid4()
+    repository.save_task_run(
+        parent_run_id,
+        {
+            "run_id": str(parent_run_id),
+            "status": "succeeded",
+            "final_response": {
+                "outputs": {"query": {"records": [{"id": "row-1"}]}}
+            },
+        },
+    )
+
+    result = service.create_purchase_follow_up_run(
+        parent_run_id, "row-1", "create follow-up"
+    )
+
+    assert result["status"] == "failed"
+    assert result["errors"] == ["无法读取所选采购申请的详情和物料明细"]
+    assert len(execution.states) == 1
+
+
+def test_service_retries_empty_detail_with_agent_feedback_before_follow_up(tmp_path):
+    repository = CommandCenterRepository(f"sqlite:///{tmp_path / 'center.sqlite3'}")
+    execution = SequenceGraph(
+        {
+            "status": "succeeded",
+            "execution_mode": "tool",
+            "final_response": {
+                "summary": "empty detail",
+                "outputs": {"detail": {"result": {"records": []}}},
+            },
+        },
+        {
+            "status": "succeeded",
+            "execution_mode": "tool",
+            "final_response": {
+                "summary": "detail found",
+                "outputs": {
+                    "detail": {
+                        "result": {
+                            "records": [
+                                {
+                                    "articleNo": "M-1",
+                                    "purchaseNumber": 2,
+                                    "unit": "PCS",
+                                }
+                            ]
+                        }
+                    }
+                },
+            },
+        },
+        {"status": "succeeded", "final_response": {"summary": "created"}},
+    )
+    service = CommandCenterService(
+        repository=repository,
+        recorder=Recorder(),
+        learning_graph=Graph({"final_status": "published"}),
+        execution_graph=execution,
+    )
+    parent_run_id = uuid4()
+    repository.save_task_run(
+        parent_run_id,
+        {
+            "run_id": str(parent_run_id),
+            "status": "succeeded",
+            "final_response": {
+                "outputs": {
+                    "query": {
+                        "records": [{"id": "row-1", "applyNo": "CGSQ01"}]
+                    }
+                }
+            },
+        },
+    )
+
+    result = service.create_purchase_follow_up_run(
+        parent_run_id, "row-1", "create follow-up"
+    )
+
+    assert result["status"] == "succeeded"
+    assert len(execution.states) == 3
+    retry_context = execution.states[1]["task_context"]
+    assert retry_context["selected_record"]["id"] == "row-1"
+    assert retry_context["prior_detail_attempt"]["outputs"]["detail"]["result"][
+        "records"
+    ] == []
 
 
 def test_service_rejects_purchase_follow_up_record_not_in_parent_output(tmp_path):

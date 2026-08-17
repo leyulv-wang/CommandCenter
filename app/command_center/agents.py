@@ -201,8 +201,14 @@ class AgentSuite:
                 "你是 Skill 编译智能体。根据演示分析编译可复用 Skill。只使用目录内 Tool；"
                 "写步骤必须提供幂等模板；引用只能来自 task、steps、literal。"
                 "每个 input_bindings 目标必须以 body.、path. 或 query. 开头。"
+                "当 OpenAPI Body 字段是对象数组时，必须绑定整个数组（例如 body.items -> "
+                "task.content.items），不得把演示中的元素数量编译成 body.items.0、"
+                "body.items.1 等固定下标；数组输入类型声明为 array。"
                 "成功条件必须描述可复用的业务不变量。不得把演示返回的业务对象 ID"
                 "或其他单次运行值写成固定期望值；新执行产生的对象标识允许变化。"
+                "如果该 Skill 适合作为业务记录上的用户动作，填写 action 元数据："
+                "label 是用户可见动作名，required_record_fields 只声明稳定的适用字段，"
+                "context_request 描述执行前需要通过只读 Tool 获取的上下文；不要包含页面位置。"
                 f"{BINDING_PROTOCOL_PROMPT}"
             )
         else:
@@ -218,6 +224,8 @@ class AgentSuite:
                 "输入绑定只使用 task、steps、literal 数据路径，目标以 body.、path. 或 query. 开头；"
                 "写操作必须提供幂等模板，成功条件必须是可复用业务不变量。"
                 "跨系统 Skill 应保留最小必要步骤，并使用 steps.<step_id>.output 路径传递前序输出。"
+                "适合作为业务记录动作时必须填写 action 元数据，使客户端可根据 Skill 自动呈现动作；"
+                "适用性仅声明稳定的对象字段要求，复杂业务判断仍由执行智能体结合证据完成。"
                 f"{BINDING_PROTOCOL_PROMPT}"
             )
         skill = self.model.generate(
@@ -480,7 +488,9 @@ class AgentSuite:
             "并把该 Skill 声明的所有必填输入提取到 literals；不要补造用户没有表达且"
             "无法从上下文确定的业务值。candidate_task_ids 只能逐字复制 tasks 中的 "
             "task_id，绝不能填写 Skill ID 或自行生成编号；只有一个任务对象时直接返回"
-            "该对象的 task_id。"
+            "该对象的 task_id。literals 可以包含对象数组；当 Skill 要求 items 等数组输入时，"
+            "必须遍历可信只读 Tool 返回的全部明细记录，按 Skill 输入描述映射每一项。即使"
+            "上下文已经提供 record_purpose 等部分输入，也必须继续提取其余全部必填输入。"
         )
         runtime_request = RuntimeRequest(
             role="task_matcher",

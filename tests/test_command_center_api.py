@@ -87,6 +87,15 @@ class FakeCommandCenterService:
     def select_task_object(self, run_id, object_id):
         return {"run_id": str(run_id), "status": "succeeded"}
 
+    def execute_task_action(self, run_id, action_id, record_id):
+        return {
+            "run_id": str(uuid4()),
+            "parent_run_id": str(run_id),
+            "action_id": action_id,
+            "selected_record_id": record_id,
+            "status": "succeeded",
+        }
+
     def create_task_detail_run(self, run_id, record_id):
         return {
             "run_id": str(uuid4()),
@@ -330,6 +339,19 @@ def test_purchase_follow_up_endpoint_uses_only_record_id_and_instruction():
     assert response.status_code == 201
     assert response.json()["selected_record_id"] == "row-1"
     assert "not-saved" not in response.text
+
+
+def test_generic_task_action_endpoint_uses_server_action_and_record_id():
+    parent_run_id = uuid4()
+    response = client_for(FakeCommandCenterService()).post(
+        f"/task-runs/{parent_run_id}/actions/create-follow-up/execute",
+        json={"record_id": "row-1"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["parent_run_id"] == str(parent_run_id)
+    assert response.json()["action_id"] == "create-follow-up"
+    assert response.json()["selected_record_id"] == "row-1"
 
 
 def test_system_connection_api_never_returns_the_submitted_credential():

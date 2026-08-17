@@ -185,6 +185,7 @@ export interface TaskRunView {
     | 'failed'
   execution_mode?: 'tool' | 'skill'
   candidate_objects?: TaskItem[]
+  available_actions?: AvailableTaskAction[]
   final_response?: {
     summary: string
     outputs?: Record<string, unknown>
@@ -194,6 +195,15 @@ export interface TaskRunView {
     progress?: PurchaseProgressResult
   }
   errors?: string[]
+}
+
+export interface AvailableTaskAction {
+  action_id: string
+  label: string
+  record_id: string
+  skill_id: string
+  skill_version: number
+  confirmation: 'none' | 'required'
 }
 
 export type PurchaseProgressStatus =

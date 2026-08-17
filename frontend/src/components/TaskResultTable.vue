@@ -40,12 +40,13 @@
                   追踪采购进度
                 </button>
                 <button
-                  v-if="followUpRecordId(row)"
+                  v-for="action in actionsForRow(row)"
+                  :key="action.action_id"
                   type="button"
-                  data-testid="create-follow-up"
-                  @click="emit('create-follow-up', followUpRecordId(row)!)"
+                  data-testid="execute-action"
+                  @click="emit('execute-action', action.action_id, action.record_id)"
                 >
-                  创建采购跟进任务
+                  {{ action.label }}
                 </button>
               </td>
             </tr>
@@ -71,6 +72,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { AvailableTaskAction } from '../api/types'
 
 type Row = Record<string, unknown>
 
@@ -79,14 +81,14 @@ const props = withDefaults(
     outputs: Record<string, unknown>
     allowDetails?: boolean
     allowProgress?: boolean
-    allowFollowUp?: boolean
+    actions?: AvailableTaskAction[]
   }>(),
-  { allowDetails: false, allowProgress: false, allowFollowUp: false },
+  { allowDetails: false, allowProgress: false, actions: () => [] },
 )
 const emit = defineEmits<{
   'view-detail': [recordId: string]
   'track-progress': [recordId: string]
-  'create-follow-up': [recordId: string]
+  'execute-action': [actionId: string, recordId: string]
 }>()
 
 const rows = computed(() => findRecordArray(props.outputs))
@@ -106,11 +108,11 @@ const hasDetailActions = computed(
 const hasProgressActions = computed(
   () => props.allowProgress && Boolean(rows.value?.some(progressRecordId)),
 )
-const hasFollowUpActions = computed(
-  () => props.allowFollowUp && Boolean(rows.value?.some(followUpRecordId)),
-)
 const hasRowActions = computed(
-  () => hasDetailActions.value || hasProgressActions.value || hasFollowUpActions.value,
+  () =>
+    hasDetailActions.value ||
+    hasProgressActions.value ||
+    Boolean(rows.value?.some((row) => actionsForRow(row).length)),
 )
 const rawOutput = computed(() => JSON.stringify(props.outputs, null, 2))
 
@@ -181,8 +183,13 @@ function progressRecordId(row: Row): string | null {
     : null
 }
 
-function followUpRecordId(row: Row): string | null {
-  return progressRecordId(row)
+function actionsForRow(row: Row): AvailableTaskAction[] {
+  const identities = new Set(
+    [row.id, row.task_id, row.applyNo]
+      .filter((value) => value !== null && value !== undefined && value !== '')
+      .map(String),
+  )
+  return props.actions.filter((action) => identities.has(action.record_id))
 }
 </script>
 

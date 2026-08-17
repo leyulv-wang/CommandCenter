@@ -88,6 +88,8 @@ class ToolExecutor:
         if query:
             request_kwargs["params"] = query
         body = command.arguments.get("body", {})
+        if isinstance(body, dict) and tool.body_schema:
+            body = _omit_optional_nulls(body, tool.body_schema)
         if tool.content_type == "application/json":
             request_kwargs["json"] = body
         elif body:
@@ -171,3 +173,33 @@ class ToolExecutor:
 
 class ResponseTooLargeError(ValueError):
     pass
+
+
+def _omit_optional_nulls(value: Any, schema: dict[str, Any]) -> Any:
+    """Remove only optional nulls according to the declared OpenAPI schema."""
+
+    schema_type = schema.get("type")
+    if schema_type == "object" and isinstance(value, dict):
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        required_names = set(required) if isinstance(required, list) else set()
+        normalized: dict[str, Any] = {}
+        for name, item in value.items():
+            if item is None and name not in required_names:
+                continue
+            item_schema = properties.get(name, {}) if isinstance(properties, dict) else {}
+            normalized[name] = (
+                _omit_optional_nulls(item, item_schema)
+                if isinstance(item_schema, dict)
+                else item
+            )
+        return normalized
+    if schema_type == "array" and isinstance(value, list):
+        item_schema = schema.get("items", {})
+        return [
+            _omit_optional_nulls(item, item_schema)
+            if isinstance(item_schema, dict)
+            else item
+            for item in value
+        ]
+    return value

@@ -662,6 +662,7 @@ class CommandCenterService:
             "user_request": request.user_request,
             **jsonable_encoder(result),
         }
+        self._attach_available_actions(payload)
         self.repository.save_task_run(run_id, payload)
         return payload
 
@@ -683,8 +684,142 @@ class CommandCenterService:
             "user_request": existing["user_request"],
             **jsonable_encoder(result),
         }
+        self._attach_available_actions(payload)
         self.repository.save_task_run(identifier, payload)
         return payload
+
+    def execute_task_action(
+        self,
+        run_id: UUID | str,
+        action_id: str,
+        record_id: str,
+    ) -> dict[str, Any]:
+        parent_run_id = UUID(str(run_id))
+        parent = self.repository.get_task_run(parent_run_id)
+        outputs = parent.get("final_response", {}).get("outputs")
+        skill, action = self._get_executable_action(action_id)
+        selected_record = _find_record_by_field(
+            outputs, action.object_id_field, record_id
+        )
+        if selected_record is None:
+            raise KeyError("record is not present in the saved task result")
+
+        missing_fields = [
+            field
+            for field in action.required_record_fields
+            if selected_record.get(field) in (None, "")
+        ]
+        if missing_fields:
+            raise RuntimeError("selected record does not satisfy action requirements")
+
+        preparation: dict[str, Any] | None = None
+        context_outputs: dict[str, Any] = {}
+        if action.context_request:
+            preparation = self.execution_graph.invoke(
+                {
+                    "user_request": action.context_request,
+                    "task_context": {"selected_record": selected_record},
+                }
+            )
+            response = preparation.get("final_response", {})
+            if preparation.get("status") != "succeeded" or preparation.get(
+                "execution_mode"
+            ) != "tool":
+                raise RuntimeError("action context could not be read")
+            context_outputs = (
+                response.get("outputs", {}) if isinstance(response, dict) else {}
+            )
+            if action.requires_context_records and not _contains_nonempty_record_list(
+                context_outputs
+            ):
+                raise RuntimeError("action context contains no business records")
+
+        source_reference = (
+            selected_record.get(action.source_reference_field)
+            if action.source_reference_field
+            else None
+        )
+        result = self.execution_graph.invoke(
+            {
+                "user_request": action.instruction,
+                "task_context": {
+                    "selected_record": selected_record,
+                    "action_context_outputs": context_outputs,
+                    "required_skill_id": str(skill.skill_id),
+                    "record_purpose": "formal",
+                    "source_reference": source_reference,
+                },
+            }
+        )
+        action_run_id = uuid4()
+        if preparation is not None:
+            response = preparation.get("final_response", {})
+            result["preparation"] = {
+                "status": preparation.get("status"),
+                "execution_mode": preparation.get("execution_mode"),
+                "summary": response.get("summary") if isinstance(response, dict) else None,
+                "tool_evidence": (
+                    response.get("tool_evidence", [])
+                    if isinstance(response, dict)
+                    else []
+                ),
+            }
+        payload = {
+            "run_id": str(action_run_id),
+            "parent_run_id": str(parent_run_id),
+            "action_id": action_id,
+            "selected_record_id": record_id,
+            "user_request": action.instruction,
+            **jsonable_encoder(result),
+        }
+        self.repository.save_task_run(action_run_id, payload)
+        return payload
+
+    def _get_executable_action(self, action_id: str):
+        skills = [
+            *self.repository.list_published_skills(),
+            *self.repository.list_verified_candidates(),
+        ]
+        matches = [skill for skill in skills if skill.action and skill.action.action_id == action_id]
+        if len(matches) != 1:
+            raise KeyError("action is not uniquely available")
+        return matches[0], matches[0].action
+
+    def _attach_available_actions(self, payload: dict[str, Any]) -> None:
+        if payload.get("status") != "succeeded":
+            return
+        outputs = payload.get("final_response", {}).get("outputs")
+        records = _find_record_array(outputs)
+        if not records:
+            return
+        skills = [
+            *self.repository.list_published_skills(),
+            *self.repository.list_verified_candidates(),
+        ]
+        actions: list[dict[str, Any]] = []
+        for skill in skills:
+            action = skill.action
+            if action is None:
+                continue
+            for record in records:
+                record_id = record.get(action.object_id_field)
+                if record_id in (None, "") or any(
+                    record.get(field) in (None, "")
+                    for field in action.required_record_fields
+                ):
+                    continue
+                actions.append(
+                    {
+                        "action_id": action.action_id,
+                        "label": action.label,
+                        "record_id": str(record_id),
+                        "skill_id": str(skill.skill_id),
+                        "skill_version": skill.version,
+                        "confirmation": action.confirmation,
+                    }
+                )
+        if actions:
+            payload["available_actions"] = actions
 
     def create_task_detail_run(
         self,
@@ -755,15 +890,75 @@ class CommandCenterService:
             raise KeyError("record is not present in the saved task result")
 
         follow_up_run_id = uuid4()
-        result = self.execution_graph.invoke(
+        preparation = self.execution_graph.invoke(
             {
-                "user_request": instruction,
+                "user_request": (
+                    "读取所选采购申请的主表详情和全部物料明细，仅使用只读 Tool"
+                ),
                 "task_context": {
                     "selected_record": selected_record,
-                    "requested_capability": "purchase_follow_up",
+                    "requested_capability": "purchase_follow_up_context",
                 },
             }
         )
+        if (
+            preparation.get("status") == "succeeded"
+            and preparation.get("execution_mode") == "tool"
+            and not _contains_nonempty_record_list(
+                preparation.get("final_response", {}).get("outputs")
+            )
+        ):
+            preparation = self.execution_graph.invoke(
+                {
+                    "user_request": (
+                        "重新读取所选采购申请的全部物料明细。上次结果为空；请根据 Tool "
+                        "参数语义，把可信采购申请主表 id 绑定到主表关联参数，而不是明细行 id"
+                    ),
+                    "task_context": {
+                        "selected_record": selected_record,
+                        "requested_capability": "purchase_follow_up_context",
+                        "prior_detail_attempt": preparation.get("final_response", {}),
+                    },
+                }
+            )
+        if preparation.get("status") != "succeeded" or preparation.get(
+            "execution_mode"
+        ) != "tool" or not _contains_nonempty_record_list(
+            preparation.get("final_response", {}).get("outputs")
+        ):
+            result: dict[str, Any] = {
+                "status": "failed",
+                "execution_mode": "skill",
+                "errors": ["无法读取所选采购申请的详情和物料明细"],
+                "preparation": jsonable_encoder(preparation),
+            }
+        else:
+            detail_response = preparation.get("final_response", {})
+            detail_outputs = (
+                detail_response.get("outputs", {})
+                if isinstance(detail_response, dict)
+                else {}
+            )
+            # Formal execution must never inherit the automated-test cleanup scope.
+            # This is a stable safety invariant, not a business-field mapping rule.
+            result = self.execution_graph.invoke(
+                {
+                    "user_request": instruction,
+                    "task_context": {
+                        "selected_record": selected_record,
+                        "mes_detail_outputs": detail_outputs,
+                        "requested_capability": "purchase_follow_up",
+                        "record_purpose": "formal",
+                        "source_reference": selected_record.get("applyNo"),
+                    },
+                }
+            )
+            result["preparation"] = {
+                "status": preparation.get("status"),
+                "execution_mode": preparation.get("execution_mode"),
+                "summary": detail_response.get("summary"),
+                "tool_evidence": detail_response.get("tool_evidence", []),
+            }
         payload = {
             "run_id": str(follow_up_run_id),
             "parent_run_id": str(parent_run_id),
@@ -785,16 +980,72 @@ def _find_record_by_id(
     max_depth: int = 6,
     max_values: int = 250,
 ) -> dict[str, Any] | None:
+    return _find_record_by_field(
+        value,
+        "id",
+        record_id,
+        max_depth=max_depth,
+        max_values=max_values,
+    )
+
+
+def _find_record_by_field(
+    value: Any,
+    field_name: str,
+    record_id: str,
+    *,
+    max_depth: int = 6,
+    max_values: int = 250,
+) -> dict[str, Any] | None:
     queue = deque([(value, 0)])
     visited = 0
     while queue and visited < max_values:
         current, depth = queue.popleft()
         visited += 1
         if isinstance(current, dict):
-            if "id" in current and str(current["id"]) == record_id:
+            if field_name in current and str(current[field_name]) == record_id:
                 return dict(current)
             if depth < max_depth:
                 queue.extend((child, depth + 1) for child in current.values())
         elif isinstance(current, list) and depth < max_depth:
             queue.extend((child, depth + 1) for child in current)
     return None
+
+
+def _find_record_array(value: Any) -> list[dict[str, Any]]:
+    queue = deque([(value, 0)])
+    visited = 0
+    while queue and visited < 250:
+        current, depth = queue.popleft()
+        visited += 1
+        if isinstance(current, list) and current and all(
+            isinstance(item, dict) for item in current
+        ):
+            return current
+        if depth >= 6:
+            continue
+        if isinstance(current, dict):
+            queue.extend((child, depth + 1) for child in current.values())
+        elif isinstance(current, list):
+            queue.extend((child, depth + 1) for child in current)
+    return []
+
+
+def _contains_nonempty_record_list(value: Any, *, max_values: int = 250) -> bool:
+    """Require concrete line-item evidence before a formal local write."""
+
+    queue = deque([value])
+    visited = 0
+    while queue and visited < max_values:
+        current = queue.popleft()
+        visited += 1
+        if isinstance(current, dict):
+            records = current.get("records")
+            if isinstance(records, list) and any(
+                isinstance(item, dict) and item for item in records
+            ):
+                return True
+            queue.extend(current.values())
+        elif isinstance(current, list):
+            queue.extend(current)
+    return False

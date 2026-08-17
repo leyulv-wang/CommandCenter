@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from hashlib import sha256
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol, TypedDict
@@ -12,6 +13,7 @@ from app.command_center.schemas import (
     DirectToolPlan,
     DirectToolVerification,
     SkillDefinition,
+    SkillInput,
     StepResult,
     TaskMatchDecision,
     VerificationResult,
@@ -129,8 +131,86 @@ def executable_skill_set(
             step.side_effect == tool.side_effect
             for step, tool in zip(skill.steps, tools, strict=True)
         ):
-            verified.append(skill)
+            verified.append(_generalize_indexed_array_bindings(skill, catalog))
     return [*published, *verified]
+
+
+_INDEXED_BODY_BINDING = re.compile(r"^body\.([^.]+)\.\d+\..+$")
+
+
+def _generalize_indexed_array_bindings(
+    skill: SkillDefinition,
+    catalog: Any,
+) -> SkillDefinition:
+    """Collapse recorded fixed array rows into one runtime array input.
+
+    A demonstration may contain two material rows, but that count is not a stable
+    business invariant. The OpenAPI request schema is the deterministic boundary:
+    only fields declared as arrays are generalized here. An agent still maps the
+    current MES evidence into the array value at execution time.
+    """
+
+    result = skill.model_copy(deep=True)
+    removed_expressions: set[str] = set()
+    array_inputs: dict[str, tuple[dict[str, Any], bool]] = {}
+    for step in result.steps:
+        tool = catalog.get(step.tool_id)
+        properties = tool.body_schema.get("properties", {})
+        required_fields = tool.body_schema.get("required", [])
+        if not isinstance(properties, dict):
+            continue
+        grouped: dict[str, list[str]] = {}
+        for target in step.input_bindings:
+            match = _INDEXED_BODY_BINDING.fullmatch(target)
+            if match:
+                grouped.setdefault(match.group(1), []).append(target)
+        for field_name, targets in grouped.items():
+            field_schema = properties.get(field_name, {})
+            if not isinstance(field_schema, dict) or field_schema.get("type") != "array":
+                continue
+            for target in targets:
+                removed_expressions.add(step.input_bindings.pop(target))
+            step.input_bindings[f"body.{field_name}"] = f"task.content.{field_name}"
+            array_inputs[field_name] = (
+                field_schema,
+                isinstance(required_fields, list) and field_name in required_fields,
+            )
+
+    if not array_inputs:
+        return result
+
+    remaining_expressions = {
+        expression
+        for step in result.steps
+        for expression in step.input_bindings.values()
+    }
+    removed_names = {
+        expression.removeprefix("task.content.").split(".", 1)[0]
+        for expression in removed_expressions
+        if expression.startswith("task.content.")
+        and expression not in remaining_expressions
+    }
+    inputs = [item for item in result.inputs if item.name not in removed_names]
+    existing_names = {item.name for item in inputs}
+    for field_name, (field_schema, required) in array_inputs.items():
+        if field_name in existing_names:
+            continue
+        item_schema = field_schema.get("items", {})
+        item_properties = (
+            item_schema.get("properties", {}) if isinstance(item_schema, dict) else {}
+        )
+        fields = ", ".join(str(name) for name in item_properties) or "object"
+        inputs.append(
+            SkillInput(
+                name=field_name,
+                type="array",
+                description=f"对象数组；每项字段：{fields}",
+                required=required,
+                source_hint="由当前业务对象及只读 Tool 证据映射",
+            )
+        )
+    result.inputs = inputs
+    return result
 
 
 @dataclass
@@ -176,14 +256,35 @@ def build_execution_graph(dependencies: ExecutionDependencies):
                 **task_context,
             }
             tasks = [first, *tasks[1:]]
+        skills = dependencies.skills()
+        required_skill_id = (
+            task_context.get("required_skill_id")
+            if isinstance(task_context, dict)
+            else None
+        )
+        if required_skill_id:
+            # A server-issued action pins execution to one executable Skill version.
+            # This is a publication/security boundary; the agent still maps inputs.
+            skills = [
+                skill for skill in skills if str(skill.skill_id) == str(required_skill_id)
+            ]
         return {
             "tasks": tasks,
-            "skills": dependencies.skills(),
+            "skills": skills,
             "tools": dependencies.tools() if dependencies.tools is not None else [],
             "status": "matching",
         }
 
     def plan_direct_tool(state: ExecutionState) -> ExecutionState:
+        task_content = (
+            state["tasks"][0].get("content", {}) if state["tasks"] else {}
+        )
+        if task_content.get("required_skill_id") or task_content.get(
+            "requested_capability"
+        ) == "purchase_follow_up":
+            # This trusted row action must use the verified, idempotent write Skill.
+            # Read-only direct Tool planning is reserved for preparing its MES evidence.
+            return {"status": "skill_matching"}
         if not state["tools"] or dependencies.direct_runner is None:
             return {"status": "skill_matching"}
         task_context = state["tasks"][0] if state["tasks"] else {}
@@ -335,7 +436,22 @@ def build_execution_graph(dependencies: ExecutionDependencies):
             }
         return {
             "run_result": result,
+            "execution_mode": "skill",
             "status": "verifying" if result.status == "succeeded" else "failed",
+            "errors": (
+                [] if result.status == "succeeded" else ["Skill 步骤执行失败"]
+            ),
+            "final_response": (
+                {}
+                if result.status == "succeeded"
+                else {
+                    "summary": "Skill 步骤执行失败，未完成业务操作",
+                    "outputs": result.outputs,
+                    "step_results": [
+                        item.model_dump(mode="json") for item in result.step_results
+                    ],
+                }
+            ),
         }
 
     def verify(state: ExecutionState) -> ExecutionState:

@@ -156,4 +156,35 @@ describe('TaskResultTable', () => {
     expect(rows.find('[data-testid="view-detail"]').exists()).toBe(false)
     expect(object.find('[data-testid="view-detail"]').exists()).toBe(false)
   })
+
+  it('renders and emits server-provided Skill actions for the matching row', async () => {
+    const wrapper = mount(TaskResultTable, {
+      props: {
+        outputs: {
+          records: [
+            { id: 'row-1', applyNo: 'CGSQ01' },
+            { id: 'row-2', applyNo: 'CGSQ02' },
+          ],
+        },
+        actions: [
+          {
+            action_id: 'create-follow-up',
+            label: '创建跟进任务',
+            record_id: 'row-2',
+            skill_id: 'skill-1',
+            skill_version: 1,
+            confirmation: 'required',
+          },
+        ],
+      },
+    })
+
+    expect(wrapper.findAll('[data-testid="execute-action"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="execute-action"]').text()).toBe('创建跟进任务')
+    await wrapper.get('[data-testid="execute-action"]').trigger('click')
+
+    expect(wrapper.emitted('execute-action')).toEqual([
+      ['create-follow-up', 'row-2'],
+    ])
+  })
 })

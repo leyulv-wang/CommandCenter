@@ -78,6 +78,12 @@ class CreatePurchaseFollowUpRequest(BaseModel):
     instruction: str = Field(min_length=1, max_length=500)
 
 
+class ExecuteTaskActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    record_id: str = Field(min_length=1, max_length=128)
+
+
 class SelectObjectRequest(BaseModel):
     object_id: str
 
@@ -419,6 +425,23 @@ def create_router(service_provider: Callable[[], Any]) -> APIRouter:
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="task run record not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post(
+        "/task-runs/{run_id}/actions/{action_id}/execute",
+        status_code=status.HTTP_201_CREATED,
+    )
+    def execute_task_action(
+        run_id: UUID,
+        action_id: str,
+        request: ExecuteTaskActionRequest,
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.execute_task_action(run_id, action_id, request.record_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="task action not found") from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

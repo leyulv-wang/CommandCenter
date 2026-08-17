@@ -70,6 +70,20 @@ export function createPurchaseFollowUpRun(
   })
 }
 
+export function executeTaskAction(
+  parentRunId: string,
+  actionId: string,
+  recordId: string,
+) {
+  return request<TaskRunView>(
+    `/task-runs/${parentRunId}/actions/${encodeURIComponent(actionId)}/execute`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ record_id: recordId }),
+    },
+  )
+}
+
 export function selectTaskObject(runId: string, objectId: string) {
   return request<TaskRunView>(`/task-runs/${runId}/select-object`, {
     method: 'POST',

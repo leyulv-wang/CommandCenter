@@ -29,10 +29,10 @@
         :outputs="run.final_response.outputs"
         :allow-details="canViewDetails"
         :allow-progress="canTrackProgress"
-        :allow-follow-up="canCreateFollowUp"
+        :actions="run.available_actions || []"
         @view-detail="viewDetails"
         @track-progress="trackProgress"
-        @create-follow-up="createFollowUp"
+        @execute-action="executeAction"
       />
 
       <div v-if="run.status === 'needs_object_selection'" class="object-choice">
@@ -79,15 +79,17 @@
       />
     </section>
 
-    <section v-if="followUpRunning || followUpRun || followUpError" class="detail-state">
-      <h3>跨系统采购跟进</h3>
-      <p v-if="followUpRunning">正在创建采购跟进任务…</p>
-      <p v-if="followUpError" class="run-error">{{ followUpError }}</p>
-      <template v-if="followUpRun?.final_response">
-        <p>{{ followUpRun.final_response.summary }}</p>
+    <section v-if="actionRunning || actionRun || actionError" class="detail-state">
+      <h3>{{ activeActionLabel || '跨系统动作执行' }}</h3>
+      <p v-if="actionRunning">正在执行跨系统动作…</p>
+      <p v-if="actionError" data-testid="action-error" class="run-error">
+        {{ actionError }}
+      </p>
+      <template v-if="actionRun?.final_response">
+        <p>{{ actionRun.final_response.summary }}</p>
         <TaskResultTable
-          v-if="followUpRun.final_response.outputs"
-          :outputs="followUpRun.final_response.outputs"
+          v-if="actionRun.final_response.outputs"
+          :outputs="actionRun.final_response.outputs"
         />
       </template>
     </section>
@@ -99,7 +101,7 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   createPurchaseProgressRun,
-  createPurchaseFollowUpRun,
+  executeTaskAction,
   createTaskDetailRun,
   createTaskRun,
   selectTaskObject,
@@ -117,17 +119,15 @@ const detailError = ref('')
 const progressRunning = ref(false)
 const progressRun = ref<TaskRunView | null>(null)
 const progressError = ref('')
-const followUpRunning = ref(false)
-const followUpRun = ref<TaskRunView | null>(null)
-const followUpError = ref('')
+const actionRunning = ref(false)
+const actionRun = ref<TaskRunView | null>(null)
+const actionError = ref('')
+const activeActionLabel = ref('')
 const terminal = computed(() => ['succeeded', 'failed'].includes(run.value?.status || ''))
 const canViewDetails = computed(
   () => run.value?.status === 'succeeded' && run.value.execution_mode === 'tool',
 )
 const canTrackProgress = computed(
-  () => run.value?.status === 'succeeded' && run.value.execution_mode === 'tool',
-)
-const canCreateFollowUp = computed(
   () => run.value?.status === 'succeeded' && run.value.execution_mode === 'tool',
 )
 const statusLabel = computed(() => ({
@@ -150,6 +150,9 @@ async function submit() {
   detailError.value = ''
   progressRun.value = null
   progressError.value = ''
+  actionRun.value = null
+  actionError.value = ''
+  activeActionLabel.value = ''
   try {
     run.value = await createTaskRun(userRequest.value)
   } catch (error) {
@@ -189,18 +192,25 @@ async function viewDetails(recordId: string) {
   }
 }
 
-async function createFollowUp(recordId: string) {
+async function executeAction(actionId: string, recordId: string) {
   if (!run.value) return
-  followUpRunning.value = true
-  followUpRun.value = null
-  followUpError.value = ''
+  actionRunning.value = true
+  actionRun.value = null
+  actionError.value = ''
+  activeActionLabel.value =
+    run.value.available_actions?.find(
+      (action) => action.action_id === actionId && action.record_id === recordId,
+    )?.label || '跨系统动作执行'
   try {
-    followUpRun.value = await createPurchaseFollowUpRun(run.value.run_id, recordId)
+    actionRun.value = await executeTaskAction(run.value.run_id, actionId, recordId)
+    if (actionRun.value.status !== 'succeeded') {
+      actionError.value = actionRun.value.errors?.join('、') || '跨系统动作未执行成功'
+    }
   } catch (error) {
-    followUpError.value = error instanceof Error ? error.message : '采购跟进任务创建失败'
-    ElMessage.error(followUpError.value)
+    actionError.value = error instanceof Error ? error.message : '跨系统动作执行失败'
+    ElMessage.error(actionError.value)
   } finally {
-    followUpRunning.value = false
+    actionRunning.value = false
   }
 }
 

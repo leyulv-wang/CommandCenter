@@ -304,3 +304,80 @@ def test_executor_rejects_a_response_larger_than_the_profile_limit():
 
     assert result.status == "failed"
     assert result.error["code"] == "ResponseTooLarge"
+
+
+def test_executor_omits_optional_nested_nulls_from_json_body():
+    import json
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(201, json={"follow_up_id": "FOLLOW-UP-1"})
+
+    tool = ToolDefinition(
+        tool_id="connected:create_follow_up",
+        system_code="connected",
+        operation_id="create_follow_up",
+        method="POST",
+        base_url="http://connected",
+        path_template="/follow-ups",
+        content_type="application/json",
+        side_effect="write",
+        body_schema={
+            "type": "object",
+            "required": ["title", "items"],
+            "properties": {
+                "title": {"type": "string"},
+                "source_reference": {"type": "string"},
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["material_code", "quantity", "unit"],
+                        "properties": {
+                            "material_code": {"type": "string"},
+                            "quantity": {"type": "number"},
+                            "unit": {"type": "string"},
+                            "remark": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
+    )
+    executor = ToolExecutor(
+        ToolCatalog([tool]),
+        httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    command = ExecutionCommand(
+        run_id=uuid4(),
+        skill_id=uuid4(),
+        skill_version=1,
+        step_id="create",
+        tool_id=tool.tool_id,
+        arguments={
+            "body": {
+                "title": "follow-up",
+                "source_reference": None,
+                "items": [
+                    {
+                        "material_code": "M-1",
+                        "quantity": 2,
+                        "unit": "PCS",
+                        "remark": None,
+                    }
+                ],
+            }
+        },
+        idempotency_key="safe-key",
+        reason="create follow-up",
+    )
+
+    result = executor.execute(command)
+
+    assert result.status == "succeeded"
+    assert captured == {
+        "title": "follow-up",
+        "items": [{"material_code": "M-1", "quantity": 2, "unit": "PCS"}],
+    }

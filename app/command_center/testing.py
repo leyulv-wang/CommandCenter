@@ -71,12 +71,13 @@ class SkillRunner:
                 )
             idempotency_key = None
             if step.side_effect == "write":
+                source_identity = _task_source_identity(task)
                 idempotency_key = ":".join(
                     (
                         str(skill.skill_id),
                         str(skill.version),
                         str(task.get("system_code", "unknown")),
-                        str(task.get("task_id", task.get("object_id", "unknown"))),
+                        source_identity,
                         step.step_id,
                     )
                 )
@@ -103,6 +104,32 @@ class SkillRunner:
                 for step_id, value in context["steps"].items()
             },
         )
+
+
+def _task_source_identity(task: dict[str, Any]) -> str:
+    """Return the stable source object protected by write idempotency.
+
+    CommandCenter executes user actions through a neutral ``user-request`` task.
+    That task id identifies the interaction channel, not the selected business
+    object. When a trusted selected record is present, its id is therefore the
+    stable idempotency boundary. This keeps retries for one object safe without
+    collapsing writes for different objects into the same response.
+    """
+
+    content = task.get("content")
+    if isinstance(content, dict):
+        selected_record = content.get("selected_record")
+        if isinstance(selected_record, dict):
+            selected_id = selected_record.get("id")
+            if selected_id not in (None, ""):
+                return str(selected_id)
+        source_reference = content.get("source_reference")
+        if source_reference not in (None, ""):
+            return str(source_reference)
+    object_id = task.get("object_id")
+    if object_id not in (None, ""):
+        return str(object_id)
+    return str(task.get("task_id", "unknown"))
 
 
 class FixtureService(Protocol):

@@ -87,6 +87,33 @@ def test_skill_runner_resolves_cross_step_output_and_stable_idempotency():
     assert second.status == "succeeded"
 
 
+def test_skill_runner_scopes_idempotency_to_selected_business_record():
+    executor = RecordingExecutor()
+    runner = SkillRunner(executor)
+    skill = two_step_skill()
+
+    for selected_id in ("MES-APPLICATION-1", "MES-APPLICATION-2"):
+        runner.run(
+            skill,
+            {
+                "system_code": "command_center",
+                "task_id": "user-request",
+                "content": {
+                    "item_name": "material",
+                    "quantity": 10,
+                    "selected_record": {"id": selected_id},
+                },
+            },
+            run_id=uuid4(),
+        )
+
+    first_create = executor.commands[0]
+    second_create = executor.commands[2]
+    assert first_create.idempotency_key != second_create.idempotency_key
+    assert "MES-APPLICATION-1" in first_create.idempotency_key
+    assert "MES-APPLICATION-2" in second_create.idempotency_key
+
+
 def test_skill_runner_stops_after_failed_write():
     executor = RecordingExecutor(fail_step="create_purchase")
 

@@ -389,7 +389,7 @@ class FieldMappingAnalysis(BaseModel):
 
 class SkillInput(BaseModel):
     name: str
-    type: Literal["string", "integer", "number", "boolean"]
+    type: Literal["string", "integer", "number", "boolean", "array"]
     description: str
     required: bool = True
     source_hint: str | None = None
@@ -491,6 +491,22 @@ class SuccessCondition(BaseModel):
     assertion: dict[str, Any]
 
 
+class SkillActionDefinition(BaseModel):
+    """UI-independent action metadata published with a Skill version."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action_id: EvidenceIdentifier
+    label: str = Field(min_length=1, max_length=80)
+    instruction: str = Field(min_length=1, max_length=500)
+    object_id_field: str = Field(default="id", min_length=1, max_length=128)
+    required_record_fields: list[str] = Field(default_factory=list, max_length=32)
+    context_request: str | None = Field(default=None, max_length=500)
+    requires_context_records: bool = False
+    source_reference_field: str | None = Field(default=None, max_length=128)
+    confirmation: Literal["none", "required"] = "required"
+
+
 class SkillDefinition(BaseModel):
     skill_id: UUID
     version: int = Field(ge=1)
@@ -510,6 +526,7 @@ class SkillDefinition(BaseModel):
     outputs: list[SkillOutput]
     steps: list[SkillStep]
     success_conditions: list[SuccessCondition]
+    action: SkillActionDefinition | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     published_at: datetime | None = None
 
