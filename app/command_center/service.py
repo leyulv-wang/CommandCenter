@@ -849,6 +849,7 @@ class CommandCenterService:
                         "skill_id": str(skill.skill_id),
                         "skill_version": skill.version,
                         "confirmation": action.confirmation,
+                        "task_session_eligible": skill.status == "published",
                     }
                 )
         if actions:

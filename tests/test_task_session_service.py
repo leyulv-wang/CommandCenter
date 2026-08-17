@@ -270,3 +270,51 @@ def test_confirmation_token_is_single_use(session_service):
 
     with pytest.raises((ConfirmationError, TaskSessionConflictError)):
         _approve(pending, session_service)
+
+
+def test_action_hint_uses_record_from_parent_run_not_browser_payload(session_service):
+    parent_run_id = uuid4()
+    session_service.repository.save_task_run(
+        parent_run_id,
+        {
+            "run_id": str(parent_run_id),
+            "status": "succeeded",
+            "available_actions": [
+                {
+                    "action_id": "create-expense",
+                    "record_id": "record-9",
+                    "skill_id": str(WRITE_SKILL_ID),
+                    "skill_version": 1,
+                    "task_session_eligible": True,
+                }
+            ],
+            "final_response": {
+                "outputs": {
+                    "query": {
+                        "records": [
+                            {"id": "record-9", "owner": "trusted server value"}
+                        ]
+                    }
+                }
+            },
+        },
+    )
+
+    created = session_service.create(
+        CreateTaskSessionRequest.model_validate(
+            {
+                "goal": "创建报销记录",
+                "hint": {
+                    "parent_run_id": str(parent_run_id),
+                    "selected_record_id": "record-9",
+                    "selected_object": {"id": "record-9", "owner": "tampered"},
+                    "skill_id": str(WRITE_SKILL_ID),
+                    "skill_version": 1,
+                    "action_id": "create-expense",
+                },
+            }
+        )
+    )
+
+    stored = session_service.repository.get_task_session(created.session_id)
+    assert stored.selected_object["owner"] == "trusted server value"

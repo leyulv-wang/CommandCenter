@@ -174,6 +174,7 @@ describe('TaskResultTable', () => {
             skill_id: 'skill-1',
             skill_version: 1,
             confirmation: 'required',
+            task_session_eligible: true,
           },
         ],
       },
@@ -184,7 +185,10 @@ describe('TaskResultTable', () => {
     await wrapper.get('[data-testid="execute-action"]').trigger('click')
 
     expect(wrapper.emitted('execute-action')).toEqual([
-      ['create-follow-up', 'row-2'],
+      [{
+        action: expect.objectContaining({ action_id: 'create-follow-up', record_id: 'row-2' }),
+        record: { id: 'row-2', applyNo: 'CGSQ02' },
+      }],
     ])
   })
 })

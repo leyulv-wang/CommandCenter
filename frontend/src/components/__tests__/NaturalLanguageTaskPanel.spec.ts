@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import NaturalLanguageTaskPanel from '../NaturalLanguageTaskPanel.vue'
 
 const api = vi.hoisted(() => ({
+  createTaskSession: vi.fn(),
+  sendTaskSessionMessage: vi.fn(),
+  submitTaskSessionInputs: vi.fn(),
+  confirmTaskSession: vi.fn(),
+  getTaskSession: vi.fn(),
   createTaskRun: vi.fn(),
   createTaskDetailRun: vi.fn(),
   createPurchaseProgressRun: vi.fn(),
@@ -15,6 +20,23 @@ vi.mock('../../api/commandCenter', () => api)
 
 describe('NaturalLanguageTaskPanel', () => {
   beforeEach(() => {
+    api.createTaskSession.mockReset().mockResolvedValue({
+      session_id: 'session-1',
+      state: 'succeeded',
+      version: 3,
+      goal: '查询假期余额',
+      plan_revision: 1,
+      next_interaction: {
+        type: 'result',
+        status: 'succeeded',
+        summary: '员工 E-9 剩余年假 5 天',
+        steps: [],
+      },
+    })
+    api.sendTaskSessionMessage.mockReset()
+    api.submitTaskSessionInputs.mockReset()
+    api.confirmTaskSession.mockReset()
+    api.getTaskSession.mockReset()
     api.createTaskRun.mockReset().mockResolvedValue({
       run_id: 'run-1',
       user_request: '查询采购申请列表',
@@ -28,6 +50,7 @@ describe('NaturalLanguageTaskPanel', () => {
           skill_id: 'skill-1',
           skill_version: 1,
           confirmation: 'required',
+          task_session_eligible: false,
         },
       ],
       final_response: {
@@ -91,7 +114,29 @@ describe('NaturalLanguageTaskPanel', () => {
     })
   })
 
-  it('submits natural language to the existing task-run API and shows the result', async () => {
+  async function startLegacyQuery(wrapper: ReturnType<typeof mount>, goal: string) {
+    api.createTaskSession.mockResolvedValueOnce({
+      session_id: 'session-no-match',
+      state: 'failed',
+      version: 2,
+      goal,
+      plan_revision: 0,
+      next_interaction: {
+        type: 'result',
+        status: 'failed',
+        code: 'no_matching_published_skill',
+        summary: '没有找到可执行的已发布 Skill',
+        steps: [],
+      },
+    })
+    await wrapper.get('textarea').setValue(goal)
+    await wrapper.get('[data-testid="start-task-session"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="legacy-query-fallback"]').trigger('click')
+    await flushPromises()
+  }
+
+  it('starts natural language work through TaskSession', async () => {
     const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
 
     expect(wrapper.text()).toContain('输入任务')
@@ -100,11 +145,9 @@ describe('NaturalLanguageTaskPanel', () => {
     await wrapper.get('button').trigger('click')
     await flushPromises()
 
-    expect(api.createTaskRun).toHaveBeenCalledWith('查询采购申请列表')
-    expect(wrapper.text()).toContain('任务已完成')
-    expect(wrapper.text()).toContain('查询完成')
-    expect(wrapper.get('table').text()).toContain('A-1')
-    expect(wrapper.get('details').attributes('open')).toBeUndefined()
+    expect(api.createTaskSession).toHaveBeenCalledWith({ goal: '查询采购申请列表' })
+    expect(wrapper.text()).toContain('员工 E-9 剩余年假 5 天')
+    expect(api.createTaskRun).not.toHaveBeenCalled()
   })
 
   it('keeps the list visible while loading and then renders selected details', async () => {
@@ -115,9 +158,7 @@ describe('NaturalLanguageTaskPanel', () => {
       }),
     )
     const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
-    await wrapper.get('textarea').setValue('查询采购申请列表')
-    await wrapper.get('.command-input button').trigger('click')
-    await flushPromises()
+    await startLegacyQuery(wrapper, '查询采购申请列表')
 
     await wrapper.get('[data-testid="view-detail"]').trigger('click')
 
@@ -147,9 +188,7 @@ describe('NaturalLanguageTaskPanel', () => {
   it('shows a detail error without erasing the list result', async () => {
     api.createTaskDetailRun.mockRejectedValueOnce(new Error('详情服务暂不可用'))
     const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
-    await wrapper.get('textarea').setValue('查询采购申请列表')
-    await wrapper.get('.command-input button').trigger('click')
-    await flushPromises()
+    await startLegacyQuery(wrapper, '查询采购申请列表')
 
     await wrapper.get('[data-testid="view-detail"]').trigger('click')
     await flushPromises()
@@ -160,9 +199,7 @@ describe('NaturalLanguageTaskPanel', () => {
 
   it('keeps the query result visible and renders purchase progress', async () => {
     const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
-    await wrapper.get('textarea').setValue('查询孟明佳的采购申请')
-    await wrapper.get('.command-input button').trigger('click')
-    await flushPromises()
+    await startLegacyQuery(wrapper, '查询孟明佳的采购申请')
 
     await wrapper.get('[data-testid="track-progress"]').trigger('click')
     await flushPromises()
@@ -177,9 +214,7 @@ describe('NaturalLanguageTaskPanel', () => {
   it('shows a progress error without erasing the query result', async () => {
     api.createPurchaseProgressRun.mockRejectedValueOnce(new Error('追踪服务暂不可用'))
     const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
-    await wrapper.get('textarea').setValue('查询孟明佳的采购申请')
-    await wrapper.get('.command-input button').trigger('click')
-    await flushPromises()
+    await startLegacyQuery(wrapper, '查询孟明佳的采购申请')
 
     await wrapper.get('[data-testid="track-progress"]').trigger('click')
     await flushPromises()
@@ -192,9 +227,7 @@ describe('NaturalLanguageTaskPanel', () => {
 
   it('creates a cross-system follow-up from the trusted selected row', async () => {
     const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
-    await wrapper.get('textarea').setValue('查询采购申请列表')
-    await wrapper.get('.command-input button').trigger('click')
-    await flushPromises()
+    await startLegacyQuery(wrapper, '查询采购申请列表')
 
     await wrapper.get('[data-testid="execute-action"]').trigger('click')
     await flushPromises()
@@ -217,9 +250,7 @@ describe('NaturalLanguageTaskPanel', () => {
       errors: ['Skill 必填输入不完整'],
     })
     const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
-    await wrapper.get('textarea').setValue('查询采购申请列表')
-    await wrapper.get('.command-input button').trigger('click')
-    await flushPromises()
+    await startLegacyQuery(wrapper, '查询采购申请列表')
 
     await wrapper.get('[data-testid="execute-action"]').trigger('click')
     await flushPromises()
@@ -227,5 +258,49 @@ describe('NaturalLanguageTaskPanel', () => {
     expect(wrapper.get('[data-testid="action-error"]').text()).toContain(
       'Skill 必填输入不完整',
     )
+  })
+
+  it('starts a published row Action through the same TaskSession protocol', async () => {
+    api.createTaskRun.mockResolvedValueOnce({
+      run_id: 'run-1', user_request: '查询', status: 'succeeded', execution_mode: 'tool',
+      available_actions: [{
+        action_id: 'create-follow-up', label: '创建跟进任务', record_id: 'A-1',
+        skill_id: 'skill-1', skill_version: 1, confirmation: 'required',
+        task_session_eligible: true,
+      }],
+      final_response: {
+        summary: '查询完成',
+        outputs: { query: { records: [{ id: 'A-1', applyNo: 'CGSQ01' }] } },
+      },
+    })
+    const wrapper = mount(NaturalLanguageTaskPanel, { global: { plugins: [ElementPlus] } })
+    await startLegacyQuery(wrapper, '查询采购申请列表')
+    api.createTaskSession.mockClear()
+    api.createTaskSession.mockResolvedValueOnce({
+      session_id: 'action-session', state: 'awaiting_confirmation', version: 3,
+      goal: '创建跟进任务', plan_revision: 1, plan_hash: 'a'.repeat(64),
+      next_interaction: {
+        type: 'confirmation', title: '确认', summary: '创建跟进任务', plan_revision: 1,
+        plan_hash: 'a'.repeat(64), confirmation_token: 'token'.repeat(8),
+        systems: ['connected_system'], target_objects: ['A-1'],
+        write_steps: [{ step_id: 'create', name: '创建', system: 'connected_system', arguments: {} }],
+      },
+    })
+
+    await wrapper.get('[data-testid="execute-action"]').trigger('click')
+    await flushPromises()
+
+    expect(api.createTaskSession).toHaveBeenCalledWith({
+      goal: '为所选业务对象执行创建跟进任务',
+      hint: {
+        action_id: 'create-follow-up',
+        skill_id: 'skill-1',
+        skill_version: 1,
+        parent_run_id: 'run-1',
+        selected_record_id: 'A-1',
+        selected_object: { id: 'A-1', applyNo: 'CGSQ01' },
+      },
+    })
+    expect(api.executeTaskAction).not.toHaveBeenCalled()
   })
 })

@@ -92,6 +92,7 @@ class TaskSessionService:
         self.verifier = verifier
 
     def create(self, request: CreateTaskSessionRequest) -> TaskSessionView:
+        selected_object = self._trusted_hint_object(request)
         snapshot = TaskSessionSnapshot(
             session_id=uuid4(),
             state="understanding",
@@ -101,15 +102,45 @@ class TaskSessionService:
             messages=[{"role": "user", "content": request.goal}],
             selected_skill_id=request.hint.skill_id if request.hint else None,
             selected_skill_version=request.hint.skill_version if request.hint else None,
-            selected_object=(
-                deepcopy(request.hint.selected_object)
-                if request.hint and request.hint.selected_object
-                else None
-            ),
+            selected_object=selected_object,
             next_interaction=MessageInteraction(message="正在理解任务"),
         )
         self.repository.create_task_session(snapshot)
         return _snapshot_to_view(self._advance(snapshot))
+
+    def _trusted_hint_object(
+        self, request: CreateTaskSessionRequest
+    ) -> dict[str, Any] | None:
+        hint = request.hint
+        if hint is None or hint.parent_run_id is None:
+            return None
+        if not (
+            hint.selected_record_id
+            and hint.action_id
+            and hint.skill_id
+            and hint.skill_version
+        ):
+            raise ValueError("action shortcut hint is incomplete")
+        parent = self.repository.get_task_run(hint.parent_run_id)
+        action = next(
+            (
+                item
+                for item in parent.get("available_actions", [])
+                if item.get("action_id") == hint.action_id
+                and str(item.get("record_id")) == hint.selected_record_id
+                and str(item.get("skill_id")) == str(hint.skill_id)
+                and int(item.get("skill_version", 0)) == hint.skill_version
+                and item.get("task_session_eligible") is True
+            ),
+            None,
+        )
+        if action is None:
+            raise ValueError("action shortcut is not available for the saved record")
+        outputs = parent.get("final_response", {}).get("outputs")
+        record = _find_record_by_identity(outputs, hint.selected_record_id)
+        if record is None:
+            raise ValueError("selected record is not present in trusted task evidence")
+        return deepcopy(record)
 
     def add_message(
         self, session_id: UUID, request: TaskSessionMessageRequest
@@ -776,3 +807,23 @@ def _step_views(results: list[Any]) -> list[StepResultView]:
         )
         for item in results
     ]
+
+
+def _find_record_by_identity(root: Any, identity: str) -> dict[str, Any] | None:
+    queue: list[tuple[Any, int]] = [(root, 0)]
+    visited = 0
+    while queue and visited < 500:
+        value, depth = queue.pop(0)
+        visited += 1
+        if isinstance(value, dict):
+            if any(
+                str(value.get(field)) == identity
+                for field in ("id", "task_id", "record_id")
+                if value.get(field) is not None
+            ):
+                return value
+            if depth < 8:
+                queue.extend((child, depth + 1) for child in value.values())
+        elif isinstance(value, list) and depth < 8:
+            queue.extend((child, depth + 1) for child in value[:200])
+    return None

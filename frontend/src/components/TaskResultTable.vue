@@ -44,7 +44,7 @@
                   :key="action.action_id"
                   type="button"
                   data-testid="execute-action"
-                  @click="emit('execute-action', action.action_id, action.record_id)"
+                  @click="emit('execute-action', { action, record: row })"
                 >
                   {{ action.label }}
                 </button>
@@ -72,7 +72,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { AvailableTaskAction } from '../api/types'
+import type { AvailableTaskAction, TaskActionInvocation } from '../api/types'
 
 type Row = Record<string, unknown>
 
@@ -88,7 +88,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   'view-detail': [recordId: string]
   'track-progress': [recordId: string]
-  'execute-action': [actionId: string, recordId: string]
+  'execute-action': [invocation: TaskActionInvocation]
 }>()
 
 const rows = computed(() => findRecordArray(props.outputs))

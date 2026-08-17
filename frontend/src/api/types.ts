@@ -204,6 +204,12 @@ export interface AvailableTaskAction {
   skill_id: string
   skill_version: number
   confirmation: 'none' | 'required'
+  task_session_eligible: boolean
+}
+
+export interface TaskActionInvocation {
+  action: AvailableTaskAction
+  record: Record<string, unknown>
 }
 
 export type PurchaseProgressStatus =

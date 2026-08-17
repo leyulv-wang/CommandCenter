@@ -319,6 +319,7 @@ def test_service_projects_skill_actions_onto_matching_result_rows(tmp_path):
             "skill_id": str(skill.skill_id),
             "skill_version": 1,
             "confirmation": "required",
+            "task_session_eligible": False,
         }
     ]
 
