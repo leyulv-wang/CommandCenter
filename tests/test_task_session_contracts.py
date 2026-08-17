@@ -8,10 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.command_center.redaction import TraceRedactor
-from app.command_center.repository import (
-    CommandCenterRepository,
-    TaskSessionConflictError,
-)
+from app.command_center.repository import CommandCenterRepository
 from app.command_center.schemas import SkillDefinition, StepResult, VerificationResult
 from app.command_center.task_session_executor import ResumableTaskExecutor
 from app.command_center.task_session_policy import (
@@ -411,10 +408,10 @@ class ContractHarness:
             service = _service(self.tmp_path)
             pending = _finance_pending(service)
             completed = _approve(pending, service)
-            with pytest.raises((ValueError, TaskSessionConflictError)):
-                _approve(pending, service)
+            repeated = _approve(pending, service)
+            assert repeated == completed
             return ContractOutcome(
-                completed.state,
+                repeated.state,
                 len(service.raw_executor.calls),
                 len(service.raw_executor.records),
             )

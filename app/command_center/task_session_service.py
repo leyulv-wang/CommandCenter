@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from copy import deepcopy
 from typing import Any, Callable
@@ -239,7 +240,11 @@ class TaskSessionService:
     def confirm(
         self, session_id: UUID, request: TaskSessionConfirmationRequest
     ) -> TaskSessionView:
-        snapshot = self._load_at_version(session_id, request.version)
+        snapshot = self.repository.get_task_session(session_id)
+        if snapshot.version != request.version:
+            if _is_successful_confirmation_replay(snapshot, request):
+                return _snapshot_to_view(snapshot)
+            raise TaskSessionConflictError("task session version conflict")
         if snapshot.state != "awaiting_confirmation":
             raise ValueError("task session is not awaiting confirmation")
         validate_confirmation(
@@ -820,6 +825,27 @@ def _confirmation_interaction(
             )
             for step in writes
         ],
+    )
+
+
+def _is_successful_confirmation_replay(
+    snapshot: TaskSessionSnapshot,
+    request: TaskSessionConfirmationRequest,
+) -> bool:
+    if not (
+        snapshot.state == "succeeded"
+        and snapshot.confirmation_consumed
+        and request.approved
+        and snapshot.plan_hash
+        and snapshot.confirmation_token_hash
+        and request.plan_revision == snapshot.plan_revision
+    ):
+        return False
+    return hmac.compare_digest(
+        request.plan_hash, snapshot.plan_hash
+    ) and hmac.compare_digest(
+        confirmation_token_hash(request.confirmation_token),
+        snapshot.confirmation_token_hash,
     )
 
 

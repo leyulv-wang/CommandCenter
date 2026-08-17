@@ -260,16 +260,17 @@ def test_stale_version_is_rejected(session_service):
         )
 
 
-def test_confirmation_token_is_single_use(session_service):
+def test_exact_confirmation_replay_returns_saved_result_without_reexecution(session_service):
     collecting = session_service.create(CreateTaskSessionRequest(goal="创建报销记录"))
     pending = session_service.submit_inputs(
         collecting.session_id,
         TaskSessionInputRequest(version=collecting.version, values={"amount": 88}),
     )
-    _approve(pending, session_service)
+    completed = _approve(pending, session_service)
+    repeated = _approve(pending, session_service)
 
-    with pytest.raises((ConfirmationError, TaskSessionConflictError)):
-        _approve(pending, session_service)
+    assert repeated == completed
+    assert len(session_service.raw_executor.calls) == 1
 
 
 def test_action_hint_uses_record_from_parent_run_not_browser_payload(session_service):
