@@ -316,7 +316,10 @@ def create_external_app(
             return response
 
     if interface_type == "workflow":
-        @app.post("/api/purchase-requests")
+        @app.post(
+            "/api/purchase-requests",
+            openapi_extra={"x-command-center-idempotency": "header"},
+        )
         def create_purchase_request(
             request: PurchaseRequest,
             idempotency_key: str = Header(alias="Idempotency-Key"),

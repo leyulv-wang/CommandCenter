@@ -537,6 +537,23 @@ def test_purchase_follow_up_openapi_exposes_reusable_response_fields(tmp_path: P
     assert "items" in properties
 
 
+def test_purchase_request_openapi_declares_header_idempotency(tmp_path: Path):
+    app = create_external_app(
+        system_name="采购业务系统",
+        system_code="connected_system",
+        interface_type="workflow",
+        workflow_template_id="purchase_request_001",
+        database_path=tmp_path / "connected.sqlite3",
+        seed_records=[],
+        seed_tasks=[],
+    )
+
+    schema = TestClient(app).get("/openapi.json").json()
+    operation = schema["paths"]["/api/purchase-requests"]["post"]
+
+    assert operation["x-command-center-idempotency"] == "header"
+
+
 def test_automated_follow_up_requires_verification_run_id(tmp_path: Path):
     app = create_external_app(
         system_name="采购业务系统",
