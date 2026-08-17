@@ -84,6 +84,37 @@ class FakeCommandCenterService:
             "final_response": {"summary": "采购创建并回写完成"},
         }
 
+    def create_task_session(self, request):
+        self.task_session_request = request
+        return {
+            "session_id": str(uuid4()),
+            "state": "succeeded",
+            "version": 3,
+            "goal": request.goal,
+            "plan_revision": 1,
+            "next_interaction": {
+                "type": "result",
+                "status": "succeeded",
+                "summary": "员工 E-9 剩余年假 5 天",
+                "steps": [],
+            },
+        }
+
+    def submit_task_session_inputs(self, session_id, request):
+        self.task_session_input_request = request
+        return {
+            "session_id": str(session_id),
+            "state": "collecting_input",
+            "version": request.version + 1,
+            "goal": "创建报销",
+            "plan_revision": 0,
+            "next_interaction": {
+                "type": "question",
+                "prompt": "继续",
+                "field_names": ["amount"],
+            },
+        }
+
     def select_task_object(self, run_id, object_id):
         return {"run_id": str(run_id), "status": "succeeded"}
 
@@ -530,3 +561,43 @@ def test_recent_recordings_endpoint_forwards_safe_filters():
     assert response.json()[0]["recording_id"] == str(service.recording_id)
     assert service.requested_recording_source == "browser_extension"
     assert service.requested_recording_limit == 1
+
+
+def test_create_task_session_returns_next_interaction():
+    service = FakeCommandCenterService()
+
+    response = client_for(service).post(
+        "/task-sessions", json={"goal": "查询我的假期余额"}
+    )
+
+    assert response.status_code == 201
+    assert response.json()["next_interaction"]["type"] == "result"
+
+
+def test_submit_task_session_inputs_passes_optimistic_version():
+    service = FakeCommandCenterService()
+    session_id = uuid4()
+
+    response = client_for(service).post(
+        f"/task-sessions/{session_id}/inputs",
+        json={"version": 4, "values": {"amount": 88}},
+    )
+
+    assert response.status_code == 200
+    assert service.task_session_input_request.version == 4
+
+
+def test_client_cannot_supply_task_session_principal_or_permissions():
+    response = client_for(FakeCommandCenterService()).post(
+        "/task-sessions",
+        json={
+            "goal": "删除记录",
+            "principal": {
+                "subject_id": "attacker",
+                "tenant_id": "other",
+                "permissions": ["command-center:*"],
+            },
+        },
+    )
+
+    assert response.status_code == 422

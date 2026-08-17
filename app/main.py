@@ -1,5 +1,7 @@
 import json
 import logging
+import secrets
+from contextlib import asynccontextmanager
 from threading import RLock
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +50,15 @@ from app.command_center.testing import (
 from app.command_center.system_profiles import SystemProfile, load_system_profile
 from app.command_center.tool_catalog import RoutingToolCatalog, ToolCatalog
 from app.command_center.tool_executor import ToolExecutor
+from app.command_center.redaction import TraceRedactor
+from app.command_center.task_session_context import ReadOnlyTaskContextResolver
+from app.command_center.task_session_executor import ResumableTaskExecutor
+from app.command_center.task_session_policy import (
+    PlanValidator,
+    default_tool_permission_checker,
+)
+from app.command_center.task_session_schemas import PrincipalContext
+from app.command_center.task_session_service import TaskSessionService
 from app.ai_config.generator import generate_form_config
 from app.ai_config.schemas import (
     GenerateFormConfigRequest,
@@ -58,7 +69,13 @@ from app.forms.repository import FormTemplateRepository
 from app.forms.schemas import FormSubmission, FormTemplate
 
 
-app = FastAPI(title="Configurable Form Agent MVP")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    get_command_center_service().resume_pending_task_sessions()
+    yield
+
+
+app = FastAPI(title="Configurable Form Agent MVP", lifespan=lifespan)
 external_system_client = ExternalSystemClient()
 _command_center_service: CommandCenterService | None = None
 logger = logging.getLogger(__name__)
@@ -414,25 +431,24 @@ def build_command_center_components(
         credential_invalidator=system_credential_store.delete,
     )
 
+    def executable_tools():
+        tools = []
+        for system_code in profiles:
+            try:
+                tools.extend(
+                    tool
+                    for tool in catalogs.get(system_code).definitions()
+                    if tool.side_effect == "read"
+                )
+            except (KeyError, ValueError, httpx.HTTPError) as exc:
+                logger.warning(
+                    "System Tool catalog is unavailable for %s: %s",
+                    system_code,
+                    exc,
+                )
+        return tools
+
     if execution_graph is None:
-
-        def executable_tools():
-            tools = []
-            for system_code in profiles:
-                try:
-                    tools.extend(
-                        tool
-                        for tool in catalogs.get(system_code).definitions()
-                        if tool.side_effect == "read"
-                    )
-                except (KeyError, ValueError, httpx.HTTPError) as exc:
-                    logger.warning(
-                        "System Tool catalog is unavailable for %s: %s",
-                        system_code,
-                        exc,
-                    )
-            return tools
-
         execution_graph = build_execution_graph(
             ExecutionDependencies(
                 skills=executable_skills,
@@ -537,6 +553,32 @@ def build_command_center_components(
             runner=SkillRunner(executor),
         )
 
+    task_redactor = TraceRedactor(fingerprint_key=secrets.token_bytes(32))
+    task_sessions = TaskSessionService(
+        repository=repository,
+        principal_provider=lambda: PrincipalContext(
+            subject_id="local-user",
+            tenant_id="local",
+            permissions=frozenset({"command-center:*"}),
+        ),
+        agents=agents,
+        skills=repository.list_published_skills,
+        catalog=execution_catalog,
+        context_resolver=ReadOnlyTaskContextResolver(
+            agents=agents,
+            tools=executable_tools,
+            runner=DirectToolRunner(execution_catalog, execution_executor),
+            redactor=task_redactor,
+        ),
+        validator=PlanValidator(
+            execution_catalog, default_tool_permission_checker
+        ),
+        executor=ResumableTaskExecutor(
+            execution_executor, redactor=task_redactor
+        ),
+        verifier=agents,
+    )
+
     service = CommandCenterService(
         repository=repository,
         recorder=RecorderService(
@@ -553,6 +595,7 @@ def build_command_center_components(
         connection_handshakes=connection_handshakes,
         system_skill_tester_factory=system_skill_tester_factory,
         purchase_tracking_graph_factory=purchase_tracking_graph_factory,
+        task_session_service=task_sessions,
     )
     return CommandCenterComponents(
         profiles=profiles,

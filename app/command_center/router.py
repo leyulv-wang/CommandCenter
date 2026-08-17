@@ -14,6 +14,18 @@ from pydantic import (
 )
 
 from app.command_center.schemas import EvidenceIdentifier, ExtensionEventBatch
+from app.command_center.repository import TaskSessionConflictError
+from app.command_center.task_session_inputs import InputSchemaError
+from app.command_center.task_session_policy import (
+    ConfirmationError,
+    PlanValidationError,
+)
+from app.command_center.task_session_schemas import (
+    CreateTaskSessionRequest,
+    TaskSessionConfirmationRequest,
+    TaskSessionInputRequest,
+    TaskSessionMessageRequest,
+)
 
 
 class CreateRecordingRequest(BaseModel):
@@ -359,6 +371,83 @@ def create_router(service_provider: Callable[[], Any]) -> APIRouter:
             return service.get_skill(skill_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/task-sessions", status_code=status.HTTP_201_CREATED)
+    def create_task_session(
+        request: CreateTaskSessionRequest,
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.create_task_session(request)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="task permission denied") from exc
+        except (PlanValidationError, InputSchemaError, ValidationError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/task-sessions/{session_id}/messages")
+    def add_task_session_message(
+        session_id: UUID,
+        request: TaskSessionMessageRequest,
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.add_task_session_message(session_id, request)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="task session not found") from exc
+        except TaskSessionConflictError as exc:
+            raise HTTPException(status_code=409, detail="task session version conflict") from exc
+        except ConfirmationError as exc:
+            raise HTTPException(status_code=409, detail="confirmation is no longer valid") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="task permission denied") from exc
+        except (PlanValidationError, InputSchemaError, ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/task-sessions/{session_id}/inputs")
+    def submit_task_session_inputs(
+        session_id: UUID,
+        request: TaskSessionInputRequest,
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.submit_task_session_inputs(session_id, request)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="task session not found") from exc
+        except TaskSessionConflictError as exc:
+            raise HTTPException(status_code=409, detail="task session version conflict") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="task permission denied") from exc
+        except (PlanValidationError, InputSchemaError, ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.post("/task-sessions/{session_id}/confirmations")
+    def confirm_task_session(
+        session_id: UUID,
+        request: TaskSessionConfirmationRequest,
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.confirm_task_session(session_id, request)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="task session not found") from exc
+        except TaskSessionConflictError as exc:
+            raise HTTPException(status_code=409, detail="task session version conflict") from exc
+        except ConfirmationError as exc:
+            raise HTTPException(status_code=409, detail="confirmation is no longer valid") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="task permission denied") from exc
+        except (PlanValidationError, InputSchemaError, ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/task-sessions/{session_id}")
+    def get_task_session(
+        session_id: UUID,
+        service: Any = Depends(service_provider),
+    ):
+        try:
+            return service.get_task_session(session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="task session not found") from exc
 
     @router.post("/task-runs", status_code=status.HTTP_201_CREATED)
     def create_task_run(

@@ -306,6 +306,7 @@ def test_local_test_system_outage_does_not_block_readonly_observer(tmp_path):
     )
 
     assert components.service.list_skills() == []
+    assert components.service.task_session_service is not None
 
 
 def task_bound_readonly_skill() -> SkillDefinition:
